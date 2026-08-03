@@ -1,0 +1,96 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('gst_invoices', function (Blueprint $table) {
+            $table->id();
+            $table->string('invoice_number')->unique();
+            $table->date('invoice_date');
+            $table->date('due_date')->nullable();
+            $table->string('payment_terms')->default('due_on_receipt');
+            $table->string('payment_mode')->default('bank_transfer');
+
+            // Polymorphic relations
+            $table->nullableMorphs('invoicable');
+            $table->nullableMorphs('recipient');
+
+            // Supplier Snapshot
+            $table->string('supplier_name');
+            $table->string('supplier_gstin')->nullable()->index();
+            $table->string('supplier_pan')->nullable();
+            $table->string('supplier_address')->nullable();
+            $table->string('supplier_city')->nullable();
+            $table->string('supplier_state_name')->nullable();
+            $table->string('supplier_state_code', 2)->nullable();
+            $table->string('supplier_pincode')->nullable();
+            $table->string('supplier_email')->nullable();
+            $table->string('supplier_phone')->nullable();
+
+            // Recipient Snapshot
+            $table->string('recipient_name');
+            $table->string('recipient_email')->nullable();
+            $table->string('recipient_phone')->nullable();
+            $table->string('recipient_gstin')->nullable()->index();
+            $table->string('recipient_pan')->nullable();
+            $table->string('recipient_address')->nullable();
+            $table->string('recipient_city')->nullable();
+            $table->string('recipient_state_name')->nullable();
+            $table->string('recipient_state_code', 2)->nullable();
+            $table->string('recipient_pincode')->nullable();
+
+            // Place of Supply (POS)
+            $table->string('pos_state_name')->nullable();
+            $table->string('pos_state_code', 2)->nullable()->index();
+
+            // Flags
+            $table->boolean('is_interstate')->default(false);
+            $table->boolean('is_reverse_charge')->default(false);
+
+            // Financial Summaries (DECIMAL(15,2))
+            $table->decimal('gross_taxable', 15, 2)->default(0.00);
+            $table->decimal('discount', 15, 2)->default(0.00);
+            $table->decimal('subtotal', 15, 2)->default(0.00);
+            $table->decimal('cgst_amount', 15, 2)->default(0.00);
+            $table->decimal('sgst_amount', 15, 2)->default(0.00);
+            $table->decimal('igst_amount', 15, 2)->default(0.00);
+            $table->decimal('gst_amount', 15, 2)->default(0.00);
+            $table->decimal('round_off', 15, 2)->default(0.00);
+            $table->decimal('total', 15, 2)->default(0.00);
+            $table->string('currency', 3)->default('INR');
+            $table->decimal('paid_amount', 15, 2)->default(0.00);
+            $table->decimal('due_amount', 15, 2)->default(0.00);
+
+            // Status & Audit
+            $table->string('payment_status')->default('unpaid')->index();
+            $table->string('status')->default('active')->index();
+            $table->timestamp('paid_at')->nullable();
+
+            // Cancellation audit
+            $table->timestamp('cancelled_at')->nullable();
+            $table->string('cancelled_by')->nullable();
+            $table->string('cancellation_reason')->nullable();
+
+            // Cached Rendering Snapshot JSON
+            $table->json('billing_details')->nullable();
+
+            $table->text('remark')->nullable();
+            $table->unsignedBigInteger('created_by')->nullable();
+            $table->timestamps();
+
+            // Additional composite/indexes for performance
+            $table->index('invoice_date');
+            $table->index('created_at');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('gst_invoices');
+    }
+};
