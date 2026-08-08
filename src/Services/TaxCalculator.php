@@ -5,52 +5,66 @@ namespace AnjanTalukdar\GstInvoice\Services;
 use AnjanTalukdar\GstInvoice\Contracts\TaxCalculatorInterface;
 use AnjanTalukdar\GstInvoice\Data\BillingSummaryData;
 use AnjanTalukdar\GstInvoice\Data\InvoiceItemData;
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
+use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
 use AnjanTalukdar\GstInvoice\Data\TaxSummaryData;
 use AnjanTalukdar\GstInvoice\Enums\OddPaisaWeightage;
 use AnjanTalukdar\GstInvoice\Enums\RoundingStrategy;
 use AnjanTalukdar\GstInvoice\Enums\TaxCategory;
 use AnjanTalukdar\GstInvoice\ValueObjects\Money;
+use InvalidArgumentException;
 
 class TaxCalculator implements TaxCalculatorInterface
 {
-    public function calculate(array $items, array $options = []): BillingSummaryData
+    /**
+     * Calculate billing summary for invoice line items.
+     *
+     * @param InvoiceItemInput[] $items
+     * @param InvoiceOptions|null $options
+     */
+    public function calculate(array $items, ?InvoiceOptions $options = null): BillingSummaryData
     {
-        $discountMode = $options['discount_mode'] ?? 'bill';
-        $gstMode = $options['gst_mode'] ?? config('gst-invoice.gst_mode', 'inclusive');
+        $options = $options ?? new InvoiceOptions();
+
+        $discountMode = $options->discountMode ?? 'bill';
+        $gstMode = $options->gstMode ?? config('gst-invoice.gst_mode', 'inclusive');
         $isInclusive = ($gstMode === 'inclusive');
 
-        $supplierStateCode = $options['supplier_state_code'] ?? config('gst-invoice.supplier.state_code');
-        $posStateCode = $options['pos_state_code'] ?? ($options['recipient_state_code'] ?? null);
-        $posStateName = $options['pos_state_name'] ?? ($options['recipient_state_name'] ?? null);
+        $supplierStateCode = $options->supplierStateCode ?? ($options->supplier?->stateCode ?: config('gst-invoice.supplier.state_code'));
+        $posStateCode = $options->posStateCode ?? ($options->recipient?->shippingStateCode ?: ($options->recipient?->stateCode ?: null));
+        $posStateName = $options->posStateName ?? ($options->recipient?->shippingStateName ?: ($options->recipient?->stateName ?: null));
 
         $supplierStateCodeFormatted = $supplierStateCode ? str_pad((string)$supplierStateCode, 2, '0', STR_PAD_LEFT) : null;
         $posStateCodeFormatted = $posStateCode ? str_pad((string)$posStateCode, 2, '0', STR_PAD_LEFT) : null;
 
-        $isInterstate = (bool)($options['is_interstate'] ?? ($supplierStateCodeFormatted && $posStateCodeFormatted && $supplierStateCodeFormatted !== $posStateCodeFormatted));
-        $isReverseCharge = (bool)($options['is_reverse_charge'] ?? false);
+        $isInterstate = (bool)($options->isInterstate ?? ($supplierStateCodeFormatted && $posStateCodeFormatted && $supplierStateCodeFormatted !== $posStateCodeFormatted));
+        $isReverseCharge = $options->isReverseCharge;
 
-        $roundingStrategy = $options['rounding_strategy'] ?? config('gst-invoice.rounding_strategy', RoundingStrategy::STANDARD->value);
-        $oddPaisaWeightage = $options['odd_paisa_weightage'] ?? config('gst-invoice.odd_paisa_weightage', OddPaisaWeightage::CGST->value);
+        $roundingStrategy = $options->roundingStrategy ?? config('gst-invoice.rounding_strategy', RoundingStrategy::STANDARD->value);
+        $oddPaisaWeightage = $options->oddPaisaWeightage ?? config('gst-invoice.odd_paisa_weightage', OddPaisaWeightage::CGST->value);
         $oddPaisaWeightageVal = $oddPaisaWeightage instanceof OddPaisaWeightage ? $oddPaisaWeightage->value : (string)$oddPaisaWeightage;
 
-        $billDiscountMoney = Money::of($options['discount'] ?? 0);
+        $billDiscountMoney = Money::of($options->discount);
 
         // 1. Process initial item raw values
         $itemsData = [];
         $totalInitialTaxableMoney = Money::zero();
 
         foreach ($items as $item) {
-            $qty = (float)($item['quantity'] ?? 1);
-            $unitPriceMoney = Money::of($item['unit_price'] ?? 0);
-            $gstRate = (float)($item['gst_rate'] ?? config('gst-invoice.default_gst_rate', 18));
-            $taxCat = strtolower($item['tax_category'] ?? 'taxable');
+            if (!$item instanceof InvoiceItemInput) {
+                throw new InvalidArgumentException('Each item must be an instance of InvoiceItemInput');
+            }
+
+            $qty = $item->quantity;
+            $unitPriceMoney = Money::of($item->unitPrice);
+            $gstRate = $item->gstRate;
+            $taxCat = strtolower($item->taxCategory);
 
             if ($taxCat !== TaxCategory::TAXABLE->value) {
                 $gstRate = 0.00;
             }
 
-            $itemDiscountMoney = Money::of($item['discount'] ?? ($item['item_discount'] ?? 0));
-
+            $itemDiscountMoney = Money::of($item->discount);
             $grossLineMoney = $unitPriceMoney->multiply($qty);
 
             if ($isInclusive && $gstRate > 0) {
@@ -65,23 +79,23 @@ class TaxCalculator implements TaxCalculatorInterface
 
             $totalInitialTaxableMoney = $totalInitialTaxableMoney->add($itemTaxableBeforeBillDiscountMoney);
 
-            $codeType = strtoupper($item['code_type'] ?? config('gst-invoice.default_code_type', 'SAC'));
+            $codeType = strtoupper($item->codeType ?: config('gst-invoice.default_code_type', 'SAC'));
             $defaultCode = $codeType === 'HSN' ? config('gst-invoice.default_hsn', '8471') : config('gst-invoice.default_sac', '998313');
-            $code = (string)($item['code'] ?? $defaultCode);
+            $code = $item->code ?: $defaultCode;
 
             $itemsData[] = [
-                'description' => $item['description'] ?? '',
+                'description' => $item->description,
                 'code_type' => $codeType,
                 'code' => $code,
                 'tax_category' => $taxCat,
                 'quantity' => $qty,
-                'unit' => $item['unit'] ?? 'Pcs',
+                'unit' => $item->unit ?: 'Pcs',
                 'unit_price' => $unitPriceMoney->getAmount(),
                 'gst_rate' => $gstRate,
                 'item_discount_money' => $itemDiscountMoney,
                 'taxable_before_bill_discount_money' => $itemTaxableBeforeBillDiscountMoney,
-                'meta_data' => $item['meta_data'] ?? null,
-                'sort_order' => (int)($item['sort_order'] ?? 0),
+                'meta_data' => $item->metaData,
+                'sort_order' => $item->sortOrder,
             ];
         }
 
@@ -170,7 +184,6 @@ class TaxCalculator implements TaxCalculatorInterface
             }
 
             $lineTotalMoney = $finalTaxableMoney->add($finalGstMoney);
-
             $totalLineDiscountMoney = $itemDiscountMoney->add($allocDiscountMoney);
 
             $processedItems[] = new InvoiceItemData(

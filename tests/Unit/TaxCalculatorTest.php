@@ -4,6 +4,12 @@ namespace AnjanTalukdar\GstInvoice\Tests\Unit;
 
 require_once __DIR__ . '/../TestCase.php';
 
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
+use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
+use AnjanTalukdar\GstInvoice\Enums\CodeType;
+use AnjanTalukdar\GstInvoice\Enums\GstMode;
+use AnjanTalukdar\GstInvoice\Enums\OddPaisaWeightage;
+use AnjanTalukdar\GstInvoice\Enums\TaxCategory;
 use AnjanTalukdar\GstInvoice\Services\TaxCalculator;
 use AnjanTalukdar\GstInvoice\Tests\TestCase;
 
@@ -19,24 +25,18 @@ class TaxCalculatorTest extends TestCase
 
     public function test_intra_state_gst_calculation_with_odd_paisa_split(): void
     {
-        // Supplying 18% tax on item where tax is ₹100.11 (odd paisa)
         $items = [
-            [
-                'description' => 'SaaS Subscription',
-                'code_type' => 'SAC',
-                'code' => '998313',
-                'quantity' => 1,
-                'unit_price' => 556.1666,
-                'gst_rate' => 18,
-            ]
+            InvoiceItemInput::make('SaaS Subscription', 556.1666)
+                ->codeType(CodeType::SAC)
+                ->code('998313')
+                ->quantity(1)
+                ->gstRate(18.0)
         ];
 
-        $options = [
-            'supplier_state_code' => '18', // Assam
-            'pos_state_code' => '18',      // Assam (Intra-state)
-            'odd_paisa_weightage' => 'cgst',
-            'gst_mode' => 'exclusive',
-        ];
+        $options = InvoiceOptions::make(GstMode::EXCLUSIVE)
+            ->supplierStateCode('18')
+            ->posStateCode('18')
+            ->oddPaisaWeightage(OddPaisaWeightage::CGST);
 
         $summary = $this->calculator->calculate($items, $options);
 
@@ -48,7 +48,7 @@ class TaxCalculatorTest extends TestCase
         $this->assertEquals(100.11, round($summary->summary->cgstAmount + $summary->summary->sgstAmount, 2));
 
         // Test with odd_paisa_weightage = 'sgst'
-        $options['odd_paisa_weightage'] = 'sgst';
+        $options->oddPaisaWeightage(OddPaisaWeightage::SGST);
         $summarySgst = $this->calculator->calculate($items, $options);
         $this->assertEquals(50.05, $summarySgst->summary->cgstAmount);
         $this->assertEquals(50.06, $summarySgst->summary->sgstAmount);
@@ -57,21 +57,16 @@ class TaxCalculatorTest extends TestCase
     public function test_interstate_gst_calculation_igst(): void
     {
         $items = [
-            [
-                'description' => 'Medical Equipment',
-                'code_type' => 'HSN',
-                'code' => '9018',
-                'quantity' => 2,
-                'unit_price' => 1000.00,
-                'gst_rate' => 12,
-            ]
+            InvoiceItemInput::make('Medical Equipment', 1000.0)
+                ->codeType(CodeType::HSN)
+                ->code('9018')
+                ->quantity(2)
+                ->gstRate(12.0)
         ];
 
-        $options = [
-            'supplier_state_code' => '18', // Assam
-            'pos_state_code' => '27',      // Maharashtra (Interstate)
-            'gst_mode' => 'exclusive',
-        ];
+        $options = InvoiceOptions::make(GstMode::EXCLUSIVE)
+            ->supplierStateCode('18')
+            ->posStateCode('27');
 
         $summary = $this->calculator->calculate($items, $options);
 
@@ -86,15 +81,12 @@ class TaxCalculatorTest extends TestCase
     public function test_exempt_and_nil_rated_tax_categories(): void
     {
         $items = [
-            [
-                'description' => 'Exempt Good',
-                'code_type' => 'HSN',
-                'code' => '0101',
-                'tax_category' => 'exempt',
-                'quantity' => 1,
-                'unit_price' => 500.00,
-                'gst_rate' => 18,
-            ]
+            InvoiceItemInput::make('Exempt Good', 500.0)
+                ->codeType(CodeType::HSN)
+                ->code('0101')
+                ->taxCategory(TaxCategory::EXEMPT)
+                ->quantity(1)
+                ->gstRate(18.0)
         ];
 
         $summary = $this->calculator->calculate($items);
@@ -106,24 +98,11 @@ class TaxCalculatorTest extends TestCase
     public function test_proportional_bill_discount_allocation(): void
     {
         $items = [
-            [
-                'description' => 'Item 1',
-                'unit_price' => 600.00,
-                'quantity' => 1,
-                'gst_rate' => 18,
-            ],
-            [
-                'description' => 'Item 2',
-                'unit_price' => 400.00,
-                'quantity' => 1,
-                'gst_rate' => 18,
-            ]
+            InvoiceItemInput::make('Item 1', 600.0)->quantity(1)->gstRate(18.0),
+            InvoiceItemInput::make('Item 2', 400.0)->quantity(1)->gstRate(18.0),
         ];
 
-        $options = [
-            'discount' => 100.00, // Bill discount
-            'gst_mode' => 'exclusive',
-        ];
+        $options = InvoiceOptions::make(GstMode::EXCLUSIVE)->discount(100.0);
 
         $summary = $this->calculator->calculate($items, $options);
 

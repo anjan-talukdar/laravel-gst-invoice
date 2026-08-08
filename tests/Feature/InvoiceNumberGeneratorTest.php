@@ -5,6 +5,9 @@ namespace AnjanTalukdar\GstInvoice\Tests\Feature;
 require_once __DIR__ . '/../TestCase.php';
 
 use AnjanTalukdar\GstInvoice\Contracts\InvoiceNumberGeneratorInterface;
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
+use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
+use AnjanTalukdar\GstInvoice\Data\RecipientInput;
 use AnjanTalukdar\GstInvoice\Facades\GstInvoice;
 use AnjanTalukdar\GstInvoice\Services\SequentialFyInvoiceNumberGenerator;
 use AnjanTalukdar\GstInvoice\Tests\TestCase;
@@ -22,9 +25,11 @@ class InvoiceNumberGeneratorTest extends TestCase
         $this->assertEquals('INV/25-26/00001', $num1);
 
         // Create an invoice with this number
-        GstInvoice::createInvoice(['name' => 'John Doe'], [
-            ['description' => 'Service', 'unit_price' => 100]
-        ], ['invoice_date' => $date, 'invoice_number' => $num1]);
+        $recipient = RecipientInput::make('John Doe');
+        $items = [InvoiceItemInput::make('Service', 100.0)];
+        $options = InvoiceOptions::make(invoiceNumber: $num1, invoiceDate: $date);
+
+        GstInvoice::createInvoice($recipient, $items, $options);
 
         $num2 = $generator->generate($date);
         $this->assertEquals('INV/25-26/00002', $num2);
@@ -41,9 +46,10 @@ class InvoiceNumberGeneratorTest extends TestCase
 
         $this->app->bind(InvoiceNumberGeneratorInterface::class, fn() => $customGenerator);
 
-        $invoice = GstInvoice::createInvoice(['name' => 'Custom Customer'], [
-            ['description' => 'Custom Item', 'unit_price' => 200]
-        ]);
+        $recipient = RecipientInput::make('Custom Customer');
+        $items = [InvoiceItemInput::make('Custom Item', 200.0)];
+
+        $invoice = GstInvoice::createInvoice($recipient, $items);
 
         $this->assertEquals('CUSTOM-2026-999', $invoice->invoice_number);
     }

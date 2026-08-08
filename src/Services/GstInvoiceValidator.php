@@ -1,7 +1,11 @@
 <?php
 
+namespace AnjanTalukdar\GstInvoice\Data;
+
 namespace AnjanTalukdar\GstInvoice\Services;
 
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
+use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
 use AnjanTalukdar\GstInvoice\Enums\IndianState;
 use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstInvoiceException;
 use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstinException;
@@ -59,11 +63,15 @@ class GstInvoiceValidator
 
     /**
      * Validate full invoice generation input options and items array.
+     *
+     * @param InvoiceItemInput[] $items
+     * @param InvoiceOptions|null $options
      */
-    public function validateInvoiceInput(array $items, array $options = []): void
+    public function validateInvoiceInput(array $items, ?InvoiceOptions $options = null): void
     {
         $errors = [];
         $config = config('gst-invoice.validation', []);
+        $options = $options ?? new InvoiceOptions();
 
         if (empty($items)) {
             $errors[] = 'Invoice must contain at least one line item';
@@ -75,22 +83,22 @@ class GstInvoiceValidator
         }
 
         // Validate supplier if provided
-        $supplier = $options['supplier'] ?? config('gst-invoice.supplier', []);
+        $supplierGstin = $options->supplier?->gstin ?: config('gst-invoice.supplier.gstin');
         $requireSupplierGstin = $config['require_supplier_gstin'] ?? false;
-        if ($requireSupplierGstin && empty($supplier['gstin'])) {
+        if ($requireSupplierGstin && empty($supplierGstin)) {
             $errors[] = 'Supplier GSTIN is required by configuration';
         }
 
-        if (!empty($supplier['gstin']) && ($config['validate_gstin_format'] ?? true)) {
+        if (!empty($supplierGstin) && ($config['validate_gstin_format'] ?? true)) {
             try {
-                $this->validateGstin($supplier['gstin'], true);
+                $this->validateGstin($supplierGstin, true);
             } catch (InvalidGstinException $e) {
                 $errors[] = 'Supplier GSTIN error: ' . $e->getMessage();
             }
         }
 
         // Validate recipient GSTIN if provided
-        $recipientGstin = $options['recipient_gstin'] ?? ($options['contact']['gstin'] ?? null);
+        $recipientGstin = $options->recipient?->gstin;
         if (!empty($recipientGstin) && ($config['validate_gstin_format'] ?? true)) {
             try {
                 $this->validateGstin($recipientGstin, true);
@@ -100,35 +108,39 @@ class GstInvoiceValidator
         }
 
         // Validate items
-        $allowedRates = $options['allowed_gst_rates'] ?? ($config['allowed_gst_rates'] ?? [0, 0.25, 3, 5, 12, 18, 28]);
+        $allowedRates = $config['allowed_gst_rates'] ?? [0, 0.25, 3, 5, 12, 18, 28];
         $validateHsnSac = $config['validate_hsn_sac_format'] ?? true;
         $allowZeroPrice = $config['allow_zero_price_items'] ?? true;
 
         foreach ($items as $index => $item) {
             $idx = $index + 1;
-            if (empty($item['description'])) {
+
+            if (!$item instanceof InvoiceItemInput) {
+                $errors[] = "Item #{$idx} must be an instance of InvoiceItemInput";
+                continue;
+            }
+
+            if (empty($item->description)) {
                 $errors[] = "Item #{$idx} description is required";
             }
 
-            $qty = (float)($item['quantity'] ?? 1);
-            if ($qty <= 0) {
+            if ($item->quantity <= 0) {
                 $errors[] = "Item #{$idx} quantity must be greater than zero";
             }
 
-            $price = (float)($item['unit_price'] ?? 0);
-            if (!$allowZeroPrice && $price <= 0) {
+            if (!$allowZeroPrice && $item->unitPrice <= 0) {
                 $errors[] = "Item #{$idx} unit price must be positive";
             }
 
-            $rate = (float)($item['gst_rate'] ?? config('gst-invoice.default_gst_rate', 18));
+            $rate = $item->gstRate;
             $allowedRatesFloat = array_map('floatval', $allowedRates);
             if (!empty($allowedRates) && !in_array($rate, $allowedRatesFloat, true)) {
                 $errors[] = "Item #{$idx} GST rate {$rate}% is not in the list of allowed rates: " . implode(', ', $allowedRates);
             }
 
-            if ($validateHsnSac && !empty($item['code'])) {
-                $code = trim((string)$item['code']);
-                $codeType = strtoupper($item['code_type'] ?? 'SAC');
+            if ($validateHsnSac && !empty($item->code)) {
+                $code = trim($item->code);
+                $codeType = strtoupper($item->codeType);
                 if ($codeType === 'HSN' && !preg_match('/^[0-9]{4,8}$/', $code)) {
                     $errors[] = "Item #{$idx} HSN code '{$code}' should be 4, 6, or 8 digits";
                 } elseif ($codeType === 'SAC' && !preg_match('/^[0-9]{6}$/', $code)) {

@@ -4,6 +4,7 @@ namespace AnjanTalukdar\GstInvoice\Tests\Unit;
 
 require_once __DIR__ . '/../TestCase.php';
 
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
 use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstInvoiceException;
 use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstinException;
 use AnjanTalukdar\GstInvoice\Services\GstInvoiceValidator;
@@ -41,12 +42,9 @@ class ValidatorTest extends TestCase
     public function test_invoice_input_validation_invalid_rate(): void
     {
         $items = [
-            [
-                'description' => 'Test',
-                'quantity' => 1,
-                'unit_price' => 100,
-                'gst_rate' => 47, // Invalid GST rate
-            ]
+            InvoiceItemInput::make('Test', 100.0)
+                ->quantity(1)
+                ->gstRate(47.0) // Invalid GST rate
         ];
 
         $this->expectException(InvalidGstInvoiceException::class);

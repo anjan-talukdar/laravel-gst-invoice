@@ -3,8 +3,16 @@
 namespace AnjanTalukdar\GstInvoice\Contracts;
 
 use AnjanTalukdar\GstInvoice\Data\BillingSummaryData;
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
+use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
 
 interface TaxCalculatorInterface
 {
-    public function calculate(array $items, array $options = []): BillingSummaryData;
+    /**
+     * Calculate billing summary for invoice line items.
+     *
+     * @param InvoiceItemInput[] $items
+     * @param InvoiceOptions|null $options
+     */
+    public function calculate(array $items, ?InvoiceOptions $options = null): BillingSummaryData;
 }

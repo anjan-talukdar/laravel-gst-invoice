@@ -4,6 +4,8 @@ namespace AnjanTalukdar\GstInvoice\Tests\Feature;
 
 require_once __DIR__ . '/../TestCase.php';
 
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
+use AnjanTalukdar\GstInvoice\Data\RecipientInput;
 use AnjanTalukdar\GstInvoice\Events\InvoiceCancelled;
 use AnjanTalukdar\GstInvoice\Events\InvoiceCancelling;
 use AnjanTalukdar\GstInvoice\Events\InvoiceCreated;
@@ -21,9 +23,10 @@ class EventDispatcherTest extends TestCase
     {
         Event::fake();
 
-        $invoice = GstInvoice::createInvoice(['name' => 'Jane Doe'], [
-            ['description' => 'Consultation', 'unit_price' => 1000]
-        ]);
+        $recipient = RecipientInput::make('Jane Doe');
+        $items = [InvoiceItemInput::make('Consultation', 1000.0)];
+
+        $invoice = GstInvoice::createInvoice($recipient, $items);
 
         Event::assertDispatched(InvoiceCreating::class);
         Event::assertDispatched(InvoiceCreated::class, fn(InvoiceCreated $e) => $e->invoice->id === $invoice->id);
@@ -33,9 +36,10 @@ class EventDispatcherTest extends TestCase
     {
         Event::fake();
 
-        $invoice = GstInvoice::createInvoice(['name' => 'Jane Doe'], [
-            ['description' => 'Consultation', 'unit_price' => 1000]
-        ]);
+        $recipient = RecipientInput::make('Jane Doe');
+        $items = [InvoiceItemInput::make('Consultation', 1000.0)];
+
+        $invoice = GstInvoice::createInvoice($recipient, $items);
 
         GstInvoice::markAsPaid($invoice);
 

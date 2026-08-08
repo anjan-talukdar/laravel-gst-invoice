@@ -6,7 +6,11 @@ use AnjanTalukdar\GstInvoice\Contracts\GstRecipientInterface;
 use AnjanTalukdar\GstInvoice\Contracts\InvoiceNumberGeneratorInterface;
 use AnjanTalukdar\GstInvoice\Contracts\TaxCalculatorInterface;
 use AnjanTalukdar\GstInvoice\Data\BillingSummaryData;
-use AnjanTalukdar\GstInvoice\Data\InvoiceData;
+use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
+use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
+use AnjanTalukdar\GstInvoice\Data\PaymentInput;
+use AnjanTalukdar\GstInvoice\Data\RecipientInput;
+use AnjanTalukdar\GstInvoice\Data\SupplierInput;
 use AnjanTalukdar\GstInvoice\Enums\InvoiceStatus;
 use AnjanTalukdar\GstInvoice\Enums\PaymentStatus;
 use AnjanTalukdar\GstInvoice\Events\InvoiceCreated;
@@ -17,7 +21,6 @@ use AnjanTalukdar\GstInvoice\Events\InvoicePaymentStatusChanged;
 use AnjanTalukdar\GstInvoice\Events\InvoicePaymentStatusChanging;
 use AnjanTalukdar\GstInvoice\Models\GstInvoice;
 use AnjanTalukdar\GstInvoice\Models\GstInvoiceItem;
-
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
@@ -33,46 +36,60 @@ class GstInvoiceService
 
     /**
      * Calculate billing summary for checkout / quotation preview without saving.
+     *
+     * @param InvoiceItemInput[] $items
+     * @param InvoiceOptions|null $options
      */
-    public function calculateSummary(array $items, array $options = []): BillingSummaryData
+    public function calculateSummary(array $items, ?InvoiceOptions $options = null): BillingSummaryData
     {
         return $this->taxCalculator->calculate($items, $options);
     }
 
     /**
      * Create an immutable GST Invoice with normalized items and JSON snapshot.
+     *
+     * @param RecipientInput|GstRecipientInterface|Model $recipient
+     * @param InvoiceItemInput[] $items
+     * @param InvoiceOptions|null $options
      */
-    public function createInvoice(mixed $recipient, array $items, array $options = []): GstInvoice
+    public function createInvoice(mixed $recipient, array $items, ?InvoiceOptions $options = null): GstInvoice
     {
+        $options = $options ?? new InvoiceOptions();
+
         $this->validator->validateInvoiceInput($items, $options);
 
-        event(new InvoiceCreating(['items' => $items, 'recipient' => $recipient], $options));
+        event(new InvoiceCreating(['items' => $items, 'recipient' => $recipient], $options->toArray()));
 
         $recipientSnapshot = $this->extractRecipientSnapshot($recipient, $options);
         $supplierSnapshot = $this->extractSupplierSnapshot($options);
 
-        // Merge supplier and recipient state codes for POS calculation if not explicit
-        $options['supplier_state_code'] = $options['supplier_state_code'] ?? $supplierSnapshot['state_code'];
-        $options['recipient_state_code'] = $options['recipient_state_code'] ?? $recipientSnapshot['state_code'];
-        $options['recipient_state_name'] = $options['recipient_state_name'] ?? $recipientSnapshot['state_name'];
+        // Populate supplier & recipient state codes for POS calculation if omitted
+        if (empty($options->supplierStateCode)) {
+            $options->supplierStateCode($supplierSnapshot['state_code']);
+        }
+        if (empty($options->posStateCode)) {
+            $options->posStateCode($recipientSnapshot['shipping_state_code'] ?: $recipientSnapshot['state_code']);
+        }
+        if (empty($options->posStateName)) {
+            $options->posStateName($recipientSnapshot['shipping_state_name'] ?: $recipientSnapshot['state_name']);
+        }
 
         $summaryData = $this->calculateSummary($items, $options);
 
         return DB::transaction(function () use ($recipient, $supplierSnapshot, $recipientSnapshot, $summaryData, $options) {
-            $invoiceDate = isset($options['invoice_date']) ? Carbon::parse($options['invoice_date']) : now();
-            $dueDays = (int)($options['due_days'] ?? config('gst-invoice.default_due_days', 7));
-            $dueDate = isset($options['due_date']) ? Carbon::parse($options['due_date']) : $invoiceDate->copy()->addDays($dueDays);
+            $invoiceDate = $options->invoiceDate ? Carbon::parse($options->invoiceDate) : now();
+            $dueDays = $options->dueDays ?? (int)config('gst-invoice.default_due_days', 7);
+            $dueDate = $options->dueDate ? Carbon::parse($options->dueDate) : $invoiceDate->copy()->addDays($dueDays);
 
-            $invoiceNumber = $options['invoice_number'] ?? $this->numberGenerator->generate($invoiceDate, $options);
-
-            $invoicableModel = $options['invoicable'] ?? null;
+            $invoiceNumber = $options->invoiceNumber ?? $this->numberGenerator->generate($invoiceDate, $options->toArray());
+            $invoicableModel = $options->invoicable;
 
             $invoice = GstInvoice::create([
                 'invoice_number' => $invoiceNumber,
                 'invoice_date' => $invoiceDate,
                 'due_date' => $dueDate,
-                'payment_terms' => $options['payment_terms'] ?? config('gst-invoice.default_payment_terms', 'due_on_receipt'),
-                'payment_mode' => $options['payment_mode'] ?? config('gst-invoice.default_payment_mode', 'bank_transfer'),
+                'payment_terms' => $options->paymentTerms ?? config('gst-invoice.default_payment_terms', 'due_on_receipt'),
+                'payment_mode' => $options->paymentMode ?? config('gst-invoice.default_payment_mode', 'bank_transfer'),
 
                 'invoicable_type' => $invoicableModel instanceof Model ? get_class($invoicableModel) : null,
                 'invoicable_id' => $invoicableModel instanceof Model ? $invoicableModel->getKey() : null,
@@ -116,14 +133,14 @@ class GstInvoiceService
                 'gst_amount' => $summaryData->summary->gstAmount,
                 'round_off' => $summaryData->summary->roundOff,
                 'total' => $summaryData->summary->total,
-                'currency' => $options['currency'] ?? config('gst-invoice.currency_code', 'INR'),
+                'currency' => $options->currency ?? config('gst-invoice.currency_code', 'INR'),
                 'paid_amount' => 0.00,
                 'due_amount' => $summaryData->summary->total,
 
                 'payment_status' => PaymentStatus::UNPAID->value,
                 'status' => InvoiceStatus::ACTIVE->value,
-                'remark' => $options['remark'] ?? null,
-                'created_by' => $options['created_by'] ?? Auth::id(),
+                'remark' => $options->remark,
+                'created_by' => $options->createdBy ?? Auth::id(),
             ]);
 
             // Save normalized items
@@ -164,10 +181,12 @@ class GstInvoiceService
     /**
      * Mark an invoice as paid or partially paid.
      */
-    public function markAsPaid(GstInvoice $invoice, array $paymentData = []): GstInvoice
+    public function markAsPaid(GstInvoice $invoice, ?PaymentInput $paymentData = null): GstInvoice
     {
-        $amount = (float)($paymentData['amount'] ?? $invoice->total);
-        $paidAt = isset($paymentData['paid_at']) ? Carbon::parse($paymentData['paid_at']) : now();
+        $paymentData = $paymentData ?? new PaymentInput();
+
+        $amount = $paymentData->amount !== null ? $paymentData->amount : (float)$invoice->total;
+        $paidAt = $paymentData->paidAt ? Carbon::parse($paymentData->paidAt) : now();
 
         $previousStatus = $invoice->payment_status->value;
 
@@ -199,7 +218,7 @@ class GstInvoiceService
         event(new InvoicePaymentStatusChanged($invoice, $previousStatus, $newStatus));
 
         if ($newStatus === PaymentStatus::PAID->value) {
-            event(new InvoicePaid($invoice, $paymentData));
+            event(new InvoicePaid($invoice, $paymentData->toArray()));
         } else {
             event(new InvoicePartiallyPaid($invoice, $newPaid, $newDue));
         }
@@ -218,31 +237,39 @@ class GstInvoiceService
     /**
      * Extract recipient snapshot array.
      */
-    protected function extractRecipientSnapshot(mixed $recipient, array $options = []): array
+    protected function extractRecipientSnapshot(mixed $recipient, InvoiceOptions $options): array
     {
-        if (is_array($recipient)) {
+        if ($recipient instanceof RecipientInput) {
+            $gstin = $recipient->gstin;
             return [
-                'name' => $recipient['name'] ?? ($options['recipient_name'] ?? 'Customer'),
-                'email' => $recipient['email'] ?? ($options['recipient_email'] ?? null),
-                'phone' => $recipient['phone'] ?? ($options['recipient_phone'] ?? null),
-                'gstin' => $recipient['gstin'] ?? ($options['recipient_gstin'] ?? null),
-                'pan' => $recipient['pan'] ?? $this->validator->extractPanFromGstin($recipient['gstin'] ?? ($options['recipient_gstin'] ?? null)),
-                'address' => $recipient['address'] ?? ($options['recipient_address'] ?? null),
-                'city' => $recipient['city'] ?? ($options['recipient_city'] ?? null),
-                'state_name' => $recipient['state_name'] ?? ($options['recipient_state_name'] ?? null),
-                'state_code' => $recipient['state_code'] ?? ($options['recipient_state_code'] ?? null),
-                'pincode' => $recipient['pincode'] ?? ($options['recipient_pincode'] ?? null),
+                'name' => $recipient->name ?: 'Customer',
+                'trade_name' => $recipient->tradeName,
+                'email' => $recipient->email,
+                'phone' => $recipient->phone,
+                'gstin' => $gstin,
+                'pan' => $recipient->pan ?: $this->validator->extractPanFromGstin($gstin),
+                'address' => $recipient->address,
+                'city' => $recipient->city,
+                'state_name' => $recipient->stateName,
+                'state_code' => $recipient->stateCode,
+                'pincode' => $recipient->pincode,
+                'shipping_address' => $recipient->shippingAddress,
+                'shipping_city' => $recipient->shippingCity,
+                'shipping_state_name' => $recipient->shippingStateName,
+                'shipping_state_code' => $recipient->shippingStateCode,
+                'shipping_pincode' => $recipient->shippingPincode,
             ];
         }
 
-        if (isset($options['recipient']) && is_array($options['recipient'])) {
-            return $this->extractRecipientSnapshot($options['recipient'], $options);
+        if ($options->recipient instanceof RecipientInput) {
+            return $this->extractRecipientSnapshot($options->recipient, $options);
         }
 
         if ($recipient instanceof GstRecipientInterface) {
             $gstin = $recipient->getGstBillingGstin();
             return [
                 'name' => $recipient->getGstBillingName(),
+                'trade_name' => null,
                 'email' => $recipient->getGstBillingEmail(),
                 'phone' => $recipient->getGstBillingPhone(),
                 'gstin' => $gstin,
@@ -252,6 +279,11 @@ class GstInvoiceService
                 'state_name' => $recipient->getGstBillingStateName(),
                 'state_code' => $recipient->getGstBillingStateCode(),
                 'pincode' => $recipient->getGstBillingPincode(),
+                'shipping_address' => null,
+                'shipping_city' => null,
+                'shipping_state_name' => null,
+                'shipping_state_code' => null,
+                'shipping_pincode' => null,
             ];
         }
 
@@ -259,6 +291,7 @@ class GstInvoiceService
             $gstin = $recipient->gstin ?? ($recipient->billing_gstin ?? null);
             return [
                 'name' => $recipient->billing_name ?? ($recipient->business_name ?? ($recipient->name ?? 'Customer')),
+                'trade_name' => $recipient->trade_name ?? null,
                 'email' => $recipient->billing_email ?? ($recipient->email ?? null),
                 'phone' => $recipient->billing_phone ?? ($recipient->phone ?? null),
                 'gstin' => $gstin,
@@ -268,45 +301,57 @@ class GstInvoiceService
                 'state_name' => $recipient->billing_state_name ?? null,
                 'state_code' => $recipient->billing_state_code ?? null,
                 'pincode' => $recipient->billing_pincode ?? ($recipient->pincode ?? null),
+                'shipping_address' => $recipient->shipping_address ?? null,
+                'shipping_city' => $recipient->shipping_city ?? null,
+                'shipping_state_name' => $recipient->shipping_state_name ?? null,
+                'shipping_state_code' => $recipient->shipping_state_code ?? null,
+                'shipping_pincode' => $recipient->shipping_pincode ?? null,
             ];
         }
 
         return [
-            'name' => $options['recipient_name'] ?? 'Customer',
-            'email' => $options['recipient_email'] ?? null,
-            'phone' => $options['recipient_phone'] ?? null,
-            'gstin' => $options['recipient_gstin'] ?? null,
-            'pan' => $this->validator->extractPanFromGstin($options['recipient_gstin'] ?? null),
-            'address' => $options['recipient_address'] ?? null,
-            'city' => $options['recipient_city'] ?? null,
-            'state_name' => $options['recipient_state_name'] ?? null,
-            'state_code' => $options['recipient_state_code'] ?? null,
-            'pincode' => $options['recipient_pincode'] ?? null,
+            'name' => 'Customer',
+            'trade_name' => null,
+            'email' => null,
+            'phone' => null,
+            'gstin' => null,
+            'pan' => null,
+            'address' => null,
+            'city' => null,
+            'state_name' => null,
+            'state_code' => null,
+            'pincode' => null,
+            'shipping_address' => null,
+            'shipping_city' => null,
+            'shipping_state_name' => null,
+            'shipping_state_code' => null,
+            'shipping_pincode' => null,
         ];
     }
 
     /**
      * Extract supplier snapshot from config or options.
      */
-    protected function extractSupplierSnapshot(array $options = []): array
+    protected function extractSupplierSnapshot(InvoiceOptions $options): array
     {
         $config = config('gst-invoice.supplier', []);
-        $opt = $options['supplier'] ?? [];
+        $opt = $options->supplier;
 
-        $gstin = $opt['gstin'] ?? ($config['gstin'] ?? null);
+        $gstin = $opt?->gstin ?: ($config['gstin'] ?? null);
 
         return [
-            'name' => $opt['name'] ?? ($config['name'] ?? 'Supplier'),
+            'name' => $opt?->name ?: ($config['name'] ?? 'Supplier'),
+            'trade_name' => $opt?->tradeName ?: ($config['trade_name'] ?? null),
             'gstin' => $gstin,
-            'pan' => $opt['pan'] ?? ($config['pan'] ?? $this->validator->extractPanFromGstin($gstin)),
-            'address' => $opt['address'] ?? ($config['address'] ?? null),
-            'city' => $opt['city'] ?? ($config['city'] ?? null),
-            'state_name' => $opt['state'] ?? ($config['state'] ?? null),
-            'state_code' => $opt['state_code'] ?? ($config['state_code'] ?? null),
-            'pincode' => $opt['pincode'] ?? ($config['pincode'] ?? null),
-            'email' => $opt['email'] ?? ($config['email'] ?? null),
-            'phone' => $opt['phone'] ?? ($config['phone'] ?? null),
-            'bank_details' => $opt['bank_details'] ?? ($config['bank_details'] ?? []),
+            'pan' => $opt?->pan ?: ($config['pan'] ?? $this->validator->extractPanFromGstin($gstin)),
+            'address' => $opt?->address ?: ($config['address'] ?? null),
+            'city' => $opt?->city ?: ($config['city'] ?? null),
+            'state_name' => $opt?->stateName ?: ($config['state'] ?? null),
+            'state_code' => $opt?->stateCode ?: ($config['state_code'] ?? null),
+            'pincode' => $opt?->pincode ?: ($config['pincode'] ?? null),
+            'email' => $opt?->email ?: ($config['email'] ?? null),
+            'phone' => $opt?->phone ?: ($config['phone'] ?? null),
+            'bank_details' => $opt?->bankDetails ? $opt->bankDetails->toArray() : ($config['bank_details'] ?? []),
         ];
     }
 }
