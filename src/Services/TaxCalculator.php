@@ -150,7 +150,14 @@ class TaxCalculator implements TaxCalculatorInterface
                 : Money::zero();
 
             if ($taxCat === TaxCategory::TAXABLE->value && $gstRate > 0) {
-                $finalGstMoney = $finalTaxableMoney->percentage($gstRate)->round($roundingStrategy);
+                if ($isInclusive) {
+                    $effectiveGrossLineMoney = $undiscountedGrossMoney->subtract($itemDiscountMoney)->subtract($allocDiscountMoney);
+                    $finalGstMoney = max(0.00, $effectiveGrossLineMoney->subtract($finalTaxableMoney)->getAmount()) > 0
+                        ? $effectiveGrossLineMoney->subtract($finalTaxableMoney)
+                        : Money::zero();
+                } else {
+                    $finalGstMoney = $finalTaxableMoney->percentage($gstRate)->round($roundingStrategy);
+                }
             } else {
                 $finalGstMoney = Money::zero();
             }

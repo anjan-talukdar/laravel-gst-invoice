@@ -23,6 +23,31 @@ class TaxCalculatorTest extends TestCase
         $this->calculator = new TaxCalculator();
     }
 
+    public function test_inclusive_gst_calculation_exact_line_total(): void
+    {
+        // ₹2299 plan inclusive of 18% GST
+        $items1 = [
+            InvoiceItemInput::make('Basic Lab', 2299.0)->quantity(1)->gstRate(18.0)
+        ];
+        $options1 = InvoiceOptions::make(GstMode::INCLUSIVE);
+        $summary1 = $this->calculator->calculate($items1, $options1);
+
+        $this->assertEquals(1948.31, $summary1->summary->subtotal);
+        $this->assertEquals(350.69, $summary1->summary->gstAmount);
+        $this->assertEquals(2299.00, $summary1->summary->total);
+
+        // ₹4999 plan inclusive of 18% GST
+        $items2 = [
+            InvoiceItemInput::make('Advanced Diagnostics', 4999.0)->quantity(1)->gstRate(18.0)
+        ];
+        $options2 = InvoiceOptions::make(GstMode::INCLUSIVE);
+        $summary2 = $this->calculator->calculate($items2, $options2);
+
+        $this->assertEquals(4236.44, $summary2->summary->subtotal);
+        $this->assertEquals(762.56, $summary2->summary->gstAmount);
+        $this->assertEquals(4999.00, $summary2->summary->total);
+    }
+
     public function test_intra_state_gst_calculation_with_odd_paisa_split(): void
     {
         $items = [
