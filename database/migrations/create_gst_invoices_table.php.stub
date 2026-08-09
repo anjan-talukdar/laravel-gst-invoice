@@ -51,6 +51,7 @@ return new class extends Migration
             // Flags
             $table->boolean('is_interstate')->default(false);
             $table->boolean('is_reverse_charge')->default(false);
+            $table->string('discount_mode')->default('bill');
 
             // Financial Summaries (DECIMAL(15,2))
             $table->decimal('gross_taxable', 15, 2)->default(0.00);

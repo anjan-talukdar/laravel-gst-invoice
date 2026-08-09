@@ -17,6 +17,7 @@ use AnjanTalukdar\GstInvoice\Helpers\NumberToWords;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Support\Facades\Auth;
 
 class GstInvoice extends Model
 {
@@ -59,6 +60,7 @@ class GstInvoice extends Model
         'pos_state_code',
         'is_interstate',
         'is_reverse_charge',
+        'discount_mode',
 
         'gross_taxable',
         'discount',
@@ -116,8 +118,17 @@ class GstInvoice extends Model
 
         static::updating(function (GstInvoice $invoice) {
             $financialFields = [
-                'gross_taxable', 'discount', 'subtotal', 'cgst_amount', 'sgst_amount',
-                'igst_amount', 'gst_amount', 'round_off', 'total', 'supplier_name', 'supplier_gstin'
+                'gross_taxable',
+                'discount',
+                'subtotal',
+                'cgst_amount',
+                'sgst_amount',
+                'igst_amount',
+                'gst_amount',
+                'round_off',
+                'total',
+                'supplier_name',
+                'supplier_gstin'
             ];
 
             foreach ($financialFields as $field) {
@@ -187,10 +198,6 @@ class GstInvoice extends Model
 
     public function toStructuredData(): InvoiceData
     {
-        if (!empty($this->billing_details)) {
-            return InvoiceData::fromArray($this->billing_details);
-        }
-
         $itemsArr = $this->items->map(fn(GstInvoiceItem $item) => [
             'description' => $item->description,
             'code_type' => $item->code_type?->value ?? 'SAC',
@@ -219,10 +226,11 @@ class GstInvoice extends Model
             'due_date' => $this->due_date?->format('Y-m-d'),
             'payment_terms' => $this->payment_terms?->value ?? 'due_on_receipt',
             'payment_mode' => $this->payment_mode?->value ?? 'bank_transfer',
-            'is_reverse_charge' => $this->is_reverse_charge,
+            'is_reverse_charge' => (bool)$this->is_reverse_charge,
+            'discount_mode' => $this->discount_mode ?? ($this->billing_details['discount_mode'] ?? 'bill'),
             'pos_state_name' => $this->pos_state_name,
             'pos_state_code' => $this->pos_state_code,
-            'is_interstate' => $this->is_interstate,
+            'is_interstate' => (bool)$this->is_interstate,
             'supplier' => [
                 'name' => $this->supplier_name,
                 'email' => $this->supplier_email,
@@ -261,11 +269,13 @@ class GstInvoice extends Model
                 'total' => (float)$this->total,
                 'paid_amount' => (float)$this->paid_amount,
                 'due_amount' => (float)$this->due_amount,
+                'paid' => (float)$this->paid_amount,
+                'due' => (float)$this->due_amount,
             ],
             'gst_slabs' => [],
             'amount_in_words' => $this->total_in_words,
             'bank_details' => $this->bank_details,
-            'currency' => $this->currency,
+            'currency' => $this->currency ?: 'INR',
             'remark' => $this->remark,
             'status' => $this->status?->value ?? 'active',
             'payment_status' => $this->payment_status?->value ?? 'unpaid',
@@ -284,7 +294,7 @@ class GstInvoice extends Model
         $updated = $this->updateQuietly([
             'status' => InvoiceStatus::CANCELLED->value,
             'cancelled_at' => now(),
-            'cancelled_by' => (string)($cancelledBy ?? auth()->id() ?? 'system'),
+            'cancelled_by' => (string)($cancelledBy ?? Auth::id() ?? 'system'),
             'cancellation_reason' => $reason ?? 'Cancelled by user',
         ]);
 

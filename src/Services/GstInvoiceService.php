@@ -123,6 +123,7 @@ class GstInvoiceService
                 'pos_state_code' => $summaryData->posStateCode,
                 'is_interstate' => $summaryData->isInterstate,
                 'is_reverse_charge' => $summaryData->isReverseCharge,
+                'discount_mode' => $summaryData->discountMode ?? 'bill',
 
                 'gross_taxable' => $summaryData->summary->grossTaxable,
                 'discount' => $summaryData->summary->discount,
