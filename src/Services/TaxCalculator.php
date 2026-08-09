@@ -143,15 +143,24 @@ class TaxCalculator implements TaxCalculatorInterface
             $gstRate = $itemData['gst_rate'];
             $taxCat = $itemData['tax_category'];
 
-            $undiscountedGrossMoney = Money::of($unitPrice * $qty);
+            $grossBaseLineMoney = Money::of($unitPrice * $qty);
+            if ($isInclusive && $taxCat === TaxCategory::TAXABLE->value && $gstRate > 0) {
+                $grossTaxableLineMoney = Money::of($grossBaseLineMoney->getRawAmount() / (1 + ($gstRate / 100)))->round($roundingStrategy);
+            } else {
+                $grossTaxableLineMoney = $grossBaseLineMoney;
+            }
 
             $finalTaxableMoney = max(0.00, $itemData['taxable_before_bill_discount_money']->subtract($allocDiscountMoney)->getAmount()) > 0
                 ? $itemData['taxable_before_bill_discount_money']->subtract($allocDiscountMoney)->round($roundingStrategy)
                 : Money::zero();
 
+            $lineTaxableDiscountMoney = max(0.00, $grossTaxableLineMoney->subtract($finalTaxableMoney)->getAmount()) > 0
+                ? $grossTaxableLineMoney->subtract($finalTaxableMoney)
+                : Money::zero();
+
             if ($taxCat === TaxCategory::TAXABLE->value && $gstRate > 0) {
                 if ($isInclusive) {
-                    $effectiveGrossLineMoney = $undiscountedGrossMoney->subtract($itemDiscountMoney)->subtract($allocDiscountMoney);
+                    $effectiveGrossLineMoney = $grossBaseLineMoney->subtract($itemDiscountMoney)->subtract($allocDiscountMoney);
                     $finalGstMoney = max(0.00, $effectiveGrossLineMoney->subtract($finalTaxableMoney)->getAmount()) > 0
                         ? $effectiveGrossLineMoney->subtract($finalTaxableMoney)
                         : Money::zero();
@@ -233,8 +242,8 @@ class TaxCalculator implements TaxCalculatorInterface
             $gstSlabs[$rateStr]['igst_amount'] += $igstMoney->getAmount();
             $gstSlabs[$rateStr]['total_gst'] += $finalGstMoney->getAmount();
 
-            $grossTaxableTotalMoney = $grossTaxableTotalMoney->add($undiscountedGrossMoney);
-            $totalDiscountTotalMoney = $totalDiscountTotalMoney->add($totalLineDiscountMoney);
+            $grossTaxableTotalMoney = $grossTaxableTotalMoney->add($grossTaxableLineMoney);
+            $totalDiscountTotalMoney = $totalDiscountTotalMoney->add($lineTaxableDiscountMoney);
             $invoiceSubtotalMoney = $invoiceSubtotalMoney->add($finalTaxableMoney);
             $invoiceCgstMoney = $invoiceCgstMoney->add($cgstMoney);
             $invoiceSgstMoney = $invoiceSgstMoney->add($sgstMoney);
