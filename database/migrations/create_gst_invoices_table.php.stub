@@ -10,11 +10,12 @@ return new class extends Migration
     {
         Schema::create('gst_invoices', function (Blueprint $table) {
             $table->id();
+            $table->enum('invoice_type', ['quotation', 'tax_invoice', 'credit_note', 'debit_note', 'receipt_voucher'])->default('tax_invoice')->index();
+            $table->foreignId('reference_invoice_id')->nullable()->constrained('gst_invoices')->nullOnDelete();
             $table->string('invoice_number')->unique();
             $table->date('invoice_date');
             $table->date('due_date')->nullable();
             $table->string('payment_terms')->default('due_on_receipt');
-            $table->string('payment_mode')->default('bank_transfer');
 
             // Polymorphic relations
             $table->nullableMorphs('invoicable');
@@ -68,9 +69,8 @@ return new class extends Migration
             $table->decimal('due_amount', 15, 2)->default(0.00);
 
             // Status & Audit
-            $table->string('payment_status')->default('unpaid')->index();
-            $table->string('status')->default('active')->index();
-            $table->timestamp('paid_at')->nullable();
+            $table->string('payment_status')->nullable()->index();
+            $table->string('status')->default('issued')->index();
 
             // Cancellation audit
             $table->timestamp('cancelled_at')->nullable();

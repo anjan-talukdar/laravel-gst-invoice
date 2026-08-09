@@ -11,6 +11,7 @@ return new class extends Migration
         Schema::create('gst_invoice_items', function (Blueprint $table) {
             $table->id();
             $table->foreignId('gst_invoice_id')->constrained('gst_invoices')->cascadeOnDelete();
+            $table->foreignId('reference_invoice_item_id')->nullable()->constrained('gst_invoice_items')->nullOnDelete();
             $table->string('description');
             $table->string('code_type')->default('SAC')->index();
             $table->string('code')->default('998313')->index();

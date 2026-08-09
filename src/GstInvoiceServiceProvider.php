@@ -2,6 +2,7 @@
 
 namespace AnjanTalukdar\GstInvoice;
 
+use AnjanTalukdar\GstInvoice\Commands\GstInvoiceSyncCommand;
 use AnjanTalukdar\GstInvoice\Contracts\InvoiceNumberGeneratorInterface;
 use AnjanTalukdar\GstInvoice\Contracts\TaxCalculatorInterface;
 use AnjanTalukdar\GstInvoice\Services\GstInvoiceService;
@@ -34,13 +35,18 @@ class GstInvoiceServiceProvider extends ServiceProvider
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
+            $this->commands([
+                GstInvoiceSyncCommand::class,
+            ]);
+
             $this->publishes([
                 __DIR__ . '/../config/gst-invoice.php' => config_path('gst-invoice.php'),
             ], 'gst-invoice-config');
 
             $this->publishes([
-                __DIR__ . '/../database/migrations/create_gst_invoices_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time()) . '_create_gst_invoices_table.php'),
-                __DIR__ . '/../database/migrations/create_gst_invoice_items_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 1) . '_create_gst_invoice_items_table.php'),
+                __DIR__ . '/../database/migrations/create_invoice_number_sequences_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time()) . '_create_invoice_number_sequences_table.php'),
+                __DIR__ . '/../database/migrations/create_gst_invoices_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 1) . '_create_gst_invoices_table.php'),
+                __DIR__ . '/../database/migrations/create_gst_invoice_items_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 2) . '_create_gst_invoice_items_table.php'),
             ], 'gst-invoice-migrations');
 
             $this->publishes([

@@ -12,6 +12,7 @@ use AnjanTalukdar\GstInvoice\Data\PaymentInput;
 use AnjanTalukdar\GstInvoice\Data\RecipientInput;
 use AnjanTalukdar\GstInvoice\Data\SupplierInput;
 use AnjanTalukdar\GstInvoice\Enums\InvoiceStatus;
+use AnjanTalukdar\GstInvoice\Enums\InvoiceType;
 use AnjanTalukdar\GstInvoice\Enums\PaymentStatus;
 use AnjanTalukdar\GstInvoice\Events\InvoiceCreated;
 use AnjanTalukdar\GstInvoice\Events\InvoiceCreating;
@@ -19,6 +20,7 @@ use AnjanTalukdar\GstInvoice\Events\InvoicePaid;
 use AnjanTalukdar\GstInvoice\Events\InvoicePartiallyPaid;
 use AnjanTalukdar\GstInvoice\Events\InvoicePaymentStatusChanged;
 use AnjanTalukdar\GstInvoice\Events\InvoicePaymentStatusChanging;
+use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstInvoiceException;
 use AnjanTalukdar\GstInvoice\Models\GstInvoice;
 use AnjanTalukdar\GstInvoice\Models\GstInvoiceItem;
 use Carbon\Carbon;
@@ -35,7 +37,7 @@ class GstInvoiceService
     ) {}
 
     /**
-     * Calculate billing summary for checkout / quotation preview without saving.
+     * Calculate billing summary for checkout / preview without saving.
      *
      * @param InvoiceItemInput[] $items
      * @param InvoiceOptions|null $options
@@ -46,7 +48,7 @@ class GstInvoiceService
     }
 
     /**
-     * Create an immutable GST Invoice with normalized items and JSON snapshot.
+     * Create a GST Invoice document (Tax Invoice, Quotation, Credit Note, Debit Note, Receipt Voucher).
      *
      * @param RecipientInput|GstRecipientInterface|Model $recipient
      * @param InvoiceItemInput[] $items
@@ -56,6 +58,15 @@ class GstInvoiceService
     {
         $options = $options ?? new InvoiceOptions();
 
+        $invoiceType = $options->invoiceType
+            ? (InvoiceType::tryFrom($options->invoiceType) ?? InvoiceType::TAX_INVOICE)
+            : InvoiceType::TAX_INVOICE;
+
+        $statusValue = $options->status ?? (
+            $invoiceType === InvoiceType::QUOTATION ? InvoiceStatus::SENT->value : InvoiceStatus::ISSUED->value
+        );
+
+        $this->validator->validateStatusTransition($invoiceType, $statusValue);
         $this->validator->validateInvoiceInput($items, $options);
 
         event(new InvoiceCreating(['items' => $items, 'recipient' => $recipient], $options->toArray()));
@@ -63,7 +74,6 @@ class GstInvoiceService
         $recipientSnapshot = $this->extractRecipientSnapshot($recipient, $options);
         $supplierSnapshot = $this->extractSupplierSnapshot($options);
 
-        // Populate supplier & recipient state codes for POS calculation if omitted
         if (empty($options->supplierStateCode)) {
             $options->supplierStateCode($supplierSnapshot['state_code']);
         }
@@ -76,20 +86,27 @@ class GstInvoiceService
 
         $summaryData = $this->calculateSummary($items, $options);
 
-        return DB::transaction(function () use ($recipient, $supplierSnapshot, $recipientSnapshot, $summaryData, $options) {
+        return DB::transaction(function () use ($recipient, $supplierSnapshot, $recipientSnapshot, $summaryData, $options, $items, $invoiceType, $statusValue) {
             $invoiceDate = $options->invoiceDate ? Carbon::parse($options->invoiceDate) : now();
             $dueDays = $options->dueDays ?? (int)config('gst-invoice.default_due_days', 7);
             $dueDate = $options->dueDate ? Carbon::parse($options->dueDate) : $invoiceDate->copy()->addDays($dueDays);
 
-            $invoiceNumber = $options->invoiceNumber ?? $this->numberGenerator->generate($invoiceDate, $options->toArray());
+            $generatorOptions = array_merge($options->toArray(), ['invoice_type' => $invoiceType->value]);
+            $invoiceNumber = $options->invoiceNumber ?? $this->numberGenerator->generate($invoiceDate, $generatorOptions);
             $invoicableModel = $options->invoicable;
 
+            $paymentStatus = match ($invoiceType) {
+                InvoiceType::TAX_INVOICE => $options->paymentStatus ?? PaymentStatus::UNPAID->value,
+                default => null,
+            };
+
             $invoice = GstInvoice::create([
+                'invoice_type' => $invoiceType->value,
+                'reference_invoice_id' => $options->referenceInvoiceId,
                 'invoice_number' => $invoiceNumber,
                 'invoice_date' => $invoiceDate,
                 'due_date' => $dueDate,
                 'payment_terms' => $options->paymentTerms ?? config('gst-invoice.default_payment_terms', 'due_on_receipt'),
-                'payment_mode' => $options->paymentMode ?? config('gst-invoice.default_payment_mode', 'bank_transfer'),
 
                 'invoicable_type' => $invoicableModel instanceof Model ? get_class($invoicableModel) : null,
                 'invoicable_id' => $invoicableModel instanceof Model ? $invoicableModel->getKey() : null,
@@ -138,16 +155,24 @@ class GstInvoiceService
                 'paid_amount' => 0.00,
                 'due_amount' => $summaryData->summary->total,
 
-                'payment_status' => PaymentStatus::UNPAID->value,
-                'status' => InvoiceStatus::ACTIVE->value,
+                'payment_status' => $paymentStatus,
+                'status' => $statusValue,
                 'remark' => $options->remark,
                 'created_by' => $options->createdBy ?? Auth::id(),
             ]);
 
-            // Save normalized items
-            foreach ($summaryData->items as $itemData) {
+            foreach ($summaryData->items as $index => $itemData) {
+                $inputItem = $items[$index] ?? null;
+                $refItemId = null;
+                if ($inputItem instanceof InvoiceItemInput) {
+                    $refItemId = $inputItem->referenceInvoiceItemId;
+                } elseif (is_array($inputItem)) {
+                    $refItemId = $inputItem['reference_invoice_item_id'] ?? ($inputItem['referenceInvoiceItemId'] ?? null);
+                }
+
                 GstInvoiceItem::create([
                     'gst_invoice_id' => $invoice->id,
+                    'reference_invoice_item_id' => $refItemId,
                     'description' => $itemData->description,
                     'code_type' => $itemData->codeType,
                     'code' => $itemData->code,
@@ -168,7 +193,6 @@ class GstInvoiceService
                 ]);
             }
 
-            // Build full DTO snapshot with schema_version: "1.0"
             $invoice->refresh();
             $structuredDTO = $invoice->toStructuredData();
             $invoice->updateQuietly(['billing_details' => $structuredDTO->toArray()]);
@@ -180,59 +204,221 @@ class GstInvoiceService
     }
 
     /**
-     * Mark an invoice as paid or partially paid.
+     * Create a Quotation.
      */
-    public function markAsPaid(GstInvoice $invoice, ?PaymentInput $paymentData = null): GstInvoice
+    public function createQuotation(mixed $recipient, array $items, ?InvoiceOptions $options = null): GstInvoice
     {
-        $paymentData = $paymentData ?? new PaymentInput();
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::QUOTATION);
 
-        $amount = $paymentData->amount !== null ? $paymentData->amount : (float)$invoice->total;
-        $paidAt = $paymentData->paidAt ? Carbon::parse($paymentData->paidAt) : now();
+        return $this->createInvoice($recipient, $items, $options);
+    }
 
-        $previousStatus = $invoice->payment_status->value;
+    /**
+     * Create a Tax Invoice.
+     */
+    public function createTaxInvoice(mixed $recipient, array $items, ?InvoiceOptions $options = null): GstInvoice
+    {
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::TAX_INVOICE);
 
-        if ($amount >= (float)$invoice->total) {
-            $newStatus = PaymentStatus::PAID->value;
-            $newPaid = (float)$invoice->total;
-            $newDue = 0.00;
-        } else {
-            $newStatus = PaymentStatus::PARTIAL->value;
-            $newPaid = round($invoice->paid_amount + $amount, 2);
-            $newDue = max(0.00, round((float)$invoice->total - $newPaid, 2));
+        return $this->createInvoice($recipient, $items, $options);
+    }
+
+    /**
+     * Create a Line-Item Based Credit Note.
+     */
+    public function createCreditNote(GstInvoice $originalInvoice, array $items, ?InvoiceOptions $options = null): GstInvoice
+    {
+        $this->validator->validateCreditNote($originalInvoice, $items);
+
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::CREDIT_NOTE)
+            ->referenceInvoiceId($originalInvoice->id);
+
+        $recipient = $originalInvoice->recipient ?: $this->extractRecipientInputFromInvoice($originalInvoice);
+
+        return $this->createInvoice($recipient, $items, $options);
+    }
+
+    /**
+     * Create a Debit Note.
+     */
+    public function createDebitNote(GstInvoice $originalInvoice, array $items, ?InvoiceOptions $options = null): GstInvoice
+    {
+        if ($originalInvoice->invoice_type !== InvoiceType::TAX_INVOICE) {
+            throw new InvalidGstInvoiceException('Debit Notes must reference an original Tax Invoice.');
         }
 
-        event(new InvoicePaymentStatusChanging($invoice, $newStatus, $amount));
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::DEBIT_NOTE)
+            ->referenceInvoiceId($originalInvoice->id);
+
+        $recipient = $originalInvoice->recipient ?: $this->extractRecipientInputFromInvoice($originalInvoice);
+
+        return $this->createInvoice($recipient, $items, $options);
+    }
+
+    /**
+     * Create a Receipt Voucher.
+     */
+    public function createReceiptVoucher(mixed $recipient, array $items, ?InvoiceOptions $options = null): GstInvoice
+    {
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::RECEIPT_VOUCHER);
+
+        return $this->createInvoice($recipient, $items, $options);
+    }
+
+    /**
+     * Convert an Accepted Quotation into a new Tax Invoice.
+     */
+    public function convertQuotationToTaxInvoice(GstInvoice $quotation, ?array $items = null, ?InvoiceOptions $options = null): GstInvoice
+    {
+        if ($quotation->invoice_type !== InvoiceType::QUOTATION) {
+            throw new InvalidGstInvoiceException("Only documents of type 'quotation' can be converted to a Tax Invoice.");
+        }
+
+        if ($quotation->status !== InvoiceStatus::ACCEPTED) {
+            throw new InvalidGstInvoiceException("Only accepted quotations (status 'accepted') can be converted to a Tax Invoice. Current status: '{$quotation->status->value}'");
+        }
+
+        return DB::transaction(function () use ($quotation, $items, $options) {
+            $conversionItems = $items ?? $quotation->items->map(fn(GstInvoiceItem $item) => InvoiceItemInput::fromArray([
+                'description' => $item->description,
+                'unit_price' => (float)$item->unit_price,
+                'quantity' => (float)$item->quantity,
+                'unit' => $item->unit,
+                'code_type' => $item->code_type?->value ?? 'SAC',
+                'code' => $item->code,
+                'tax_category' => $item->tax_category?->value ?? 'taxable',
+                'gst_rate' => (float)$item->gst_rate,
+                'discount' => (float)$item->item_discount,
+                'sort_order' => $item->sort_order,
+                'meta_data' => $item->meta_data,
+            ]))->toArray();
+
+            $options = $options ?? new InvoiceOptions();
+            $options->invoiceType(InvoiceType::TAX_INVOICE)
+                ->referenceInvoiceId($quotation->id);
+
+            $recipient = $quotation->recipient ?: $this->extractRecipientInputFromInvoice($quotation);
+
+            return $this->createInvoice($recipient, $conversionItems, $options);
+        });
+    }
+
+    /**
+     * Create a Revised Quotation referencing a previous Quotation.
+     */
+    public function createRevisedQuotation(GstInvoice $quotation, ?array $items = null, ?InvoiceOptions $options = null): GstInvoice
+    {
+        if ($quotation->invoice_type !== InvoiceType::QUOTATION) {
+            throw new InvalidGstInvoiceException("Can only create a revised quotation from an existing quotation.");
+        }
+
+        $revisedItems = $items ?? $quotation->items->map(fn(GstInvoiceItem $item) => InvoiceItemInput::fromArray([
+            'description' => $item->description,
+            'unit_price' => (float)$item->unit_price,
+            'quantity' => (float)$item->quantity,
+            'unit' => $item->unit,
+            'code_type' => $item->code_type?->value ?? 'SAC',
+            'code' => $item->code,
+            'tax_category' => $item->tax_category?->value ?? 'taxable',
+            'gst_rate' => (float)$item->gst_rate,
+            'discount' => (float)$item->item_discount,
+            'sort_order' => $item->sort_order,
+            'meta_data' => $item->meta_data,
+        ]))->toArray();
+
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::QUOTATION)
+            ->referenceInvoiceId($quotation->id);
+
+        $recipient = $quotation->recipient ?: $this->extractRecipientInputFromInvoice($quotation);
+
+        return $this->createInvoice($recipient, $revisedItems, $options);
+    }
+
+    /**
+     * Update invoice payment summary derived fields.
+     */
+    public function updatePaymentSummary(GstInvoice $invoice, float $paidAmount): GstInvoice
+    {
+        if ($invoice->invoice_type !== InvoiceType::TAX_INVOICE) {
+            throw new InvalidGstInvoiceException("Payment tracking is only applicable for Tax Invoices.");
+        }
+
+        $total = (float)$invoice->total;
+        $paid = round(max(0.00, $paidAmount), 2);
+        $due = max(0.00, round($total - $paid, 2));
+
+        $previousStatus = $invoice->payment_status?->value ?? PaymentStatus::UNPAID->value;
+
+        if ($paid >= $total) {
+            $newStatus = PaymentStatus::PAID->value;
+        } elseif ($paid > 0) {
+            $newStatus = PaymentStatus::PARTIALLY_PAID->value;
+        } else {
+            $newStatus = PaymentStatus::UNPAID->value;
+        }
+
+        event(new InvoicePaymentStatusChanging($invoice, $newStatus, $paid));
 
         $invoice->updateQuietly([
+            'paid_amount' => $paid,
+            'due_amount' => $due,
             'payment_status' => $newStatus,
-            'paid_amount' => $newPaid,
-            'due_amount' => $newDue,
-            'paid_at' => $newPaid > 0 ? $paidAt : null,
         ]);
 
         $invoice->refresh();
-
-        // Refresh snapshot summary
         $structured = $invoice->toStructuredData();
         $invoice->updateQuietly(['billing_details' => $structured->toArray()]);
 
         event(new InvoicePaymentStatusChanged($invoice, $previousStatus, $newStatus));
 
         if ($newStatus === PaymentStatus::PAID->value) {
-            event(new InvoicePaid($invoice, $paymentData->toArray()));
-        } else {
-            event(new InvoicePartiallyPaid($invoice, $newPaid, $newDue));
+            event(new InvoicePaid($invoice, ['paid_amount' => $paid]));
+        } elseif ($newStatus === PaymentStatus::PARTIALLY_PAID->value) {
+            event(new InvoicePartiallyPaid($invoice, $paid, $due));
         }
 
         return $invoice;
     }
 
     /**
-     * Cancel an invoice.
+     * Legacy helper to mark invoice paid.
+     */
+    public function markAsPaid(GstInvoice $invoice, ?PaymentInput $paymentData = null): GstInvoice
+    {
+        $paymentData = $paymentData ?? new PaymentInput();
+        $amount = $paymentData->amount !== null ? $paymentData->amount : (float)$invoice->total;
+
+        return $this->updatePaymentSummary($invoice, (float)$invoice->paid_amount + $amount);
+    }
+
+    /**
+     * Cancel an invoice or quotation.
      */
     public function cancelInvoice(GstInvoice $invoice, ?string $reason = null, mixed $cancelledBy = null): bool
     {
         return $invoice->cancelInvoice($reason, $cancelledBy);
+    }
+
+    protected function extractRecipientInputFromInvoice(GstInvoice $invoice): RecipientInput
+    {
+        return RecipientInput::make(
+            name: $invoice->recipient_name,
+            email: $invoice->recipient_email,
+            phone: $invoice->recipient_phone,
+            gstin: $invoice->recipient_gstin,
+            pan: $invoice->recipient_pan,
+            address: $invoice->recipient_address,
+            city: $invoice->recipient_city,
+            stateName: $invoice->recipient_state_name,
+            stateCode: $invoice->recipient_state_code,
+            pincode: $invoice->recipient_pincode
+        );
     }
 
     /**

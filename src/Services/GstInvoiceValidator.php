@@ -1,14 +1,15 @@
 <?php
 
-namespace AnjanTalukdar\GstInvoice\Data;
-
 namespace AnjanTalukdar\GstInvoice\Services;
 
 use AnjanTalukdar\GstInvoice\Data\InvoiceItemInput;
 use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
 use AnjanTalukdar\GstInvoice\Enums\IndianState;
+use AnjanTalukdar\GstInvoice\Enums\InvoiceStatus;
+use AnjanTalukdar\GstInvoice\Enums\InvoiceType;
 use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstInvoiceException;
 use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstinException;
+use AnjanTalukdar\GstInvoice\Models\GstInvoice;
 
 class GstInvoiceValidator
 {
@@ -59,6 +60,56 @@ class GstInvoiceValidator
         }
 
         return null;
+    }
+
+    /**
+     * Validate status transition for a given InvoiceType.
+     */
+    public function validateStatusTransition(InvoiceType $type, string|InvoiceStatus $status): void
+    {
+        $statusEnum = $status instanceof InvoiceStatus ? $status : InvoiceStatus::tryFrom($status);
+        if (!$statusEnum || !InvoiceStatus::isAllowedForType($statusEnum, $type)) {
+            $allowedStr = implode(', ', array_map(fn($s) => $s->value, InvoiceStatus::allowedForType($type)));
+            throw new InvalidGstInvoiceException(
+                "Invalid status '{$status}' for invoice type '{$type->value}'. Allowed statuses: {$allowedStr}"
+            );
+        }
+    }
+
+    /**
+     * Validate Credit Note creation against an existing original Tax Invoice.
+     *
+     * @param GstInvoice $originalInvoice
+     * @param InvoiceItemInput[] $items
+     */
+    public function validateCreditNote(GstInvoice $originalInvoice, array $items): void
+    {
+        if ($originalInvoice->invoice_type !== InvoiceType::TAX_INVOICE) {
+            throw new InvalidGstInvoiceException('Credit Notes must reference an original Tax Invoice.');
+        }
+
+        if ($originalInvoice->isCancelled()) {
+            throw new InvalidGstInvoiceException('Cannot issue a Credit Note against a cancelled Tax Invoice.');
+        }
+
+        $originalItemIds = $originalInvoice->items->pluck('id')->all();
+
+        foreach ($items as $index => $item) {
+            $idx = $index + 1;
+            if (!$item instanceof InvoiceItemInput) {
+                continue;
+            }
+
+            if (empty($item->referenceInvoiceItemId)) {
+                throw new InvalidGstInvoiceException("Credit Note item #{$idx} must specify a reference_invoice_item_id.");
+            }
+
+            if (!in_array($item->referenceInvoiceItemId, $originalItemIds, true)) {
+                throw new InvalidGstInvoiceException(
+                    "Credit Note item #{$idx} references invalid item ID {$item->referenceInvoiceItemId} not present on original Tax Invoice {$originalInvoice->invoice_number}."
+                );
+            }
+        }
     }
 
     /**

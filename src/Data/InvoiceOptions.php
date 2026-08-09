@@ -5,8 +5,11 @@ namespace AnjanTalukdar\GstInvoice\Data;
 use AnjanTalukdar\GstInvoice\Enums\DiscountMode;
 use AnjanTalukdar\GstInvoice\Enums\GstMode;
 use AnjanTalukdar\GstInvoice\Enums\IndianState;
+use AnjanTalukdar\GstInvoice\Enums\InvoiceStatus;
+use AnjanTalukdar\GstInvoice\Enums\InvoiceType;
 use AnjanTalukdar\GstInvoice\Enums\OddPaisaWeightage;
 use AnjanTalukdar\GstInvoice\Enums\PaymentMode;
+use AnjanTalukdar\GstInvoice\Enums\PaymentStatus;
 use AnjanTalukdar\GstInvoice\Enums\PaymentTerm;
 use AnjanTalukdar\GstInvoice\Enums\RoundingStrategy;
 use DateTimeInterface;
@@ -23,6 +26,10 @@ class InvoiceOptions implements JsonSerializable
     public ?string $oddPaisaWeightage = null;
     public ?string $paymentTerms = null;
     public ?string $paymentMode = null;
+    public ?string $invoiceType = null;
+    public ?int $referenceInvoiceId = null;
+    public ?string $status = null;
+    public ?string $paymentStatus = null;
 
     public function __construct(
         GstMode|string|null $gstMode = null,
@@ -46,7 +53,11 @@ class InvoiceOptions implements JsonSerializable
         public int|string|null $createdBy = null,
         public ?Model $invoicable = null,
         public ?SupplierInput $supplier = null,
-        public ?RecipientInput $recipient = null
+        public ?RecipientInput $recipient = null,
+        InvoiceType|string|null $invoiceType = null,
+        ?int $referenceInvoiceId = null,
+        InvoiceStatus|string|null $status = null,
+        PaymentStatus|string|null $paymentStatus = null
     ) {
         $this->gstMode = $gstMode instanceof GstMode ? $gstMode->value : ($gstMode ? strtolower((string)$gstMode) : null);
         $this->discountMode = $discountMode instanceof DiscountMode ? $discountMode->value : ($discountMode ? strtolower((string)$discountMode) : null);
@@ -56,6 +67,10 @@ class InvoiceOptions implements JsonSerializable
         $this->oddPaisaWeightage = $oddPaisaWeightage instanceof OddPaisaWeightage ? $oddPaisaWeightage->value : ($oddPaisaWeightage ? strtolower((string)$oddPaisaWeightage) : null);
         $this->paymentTerms = $paymentTerms instanceof PaymentTerm ? $paymentTerms->value : ($paymentTerms ? strtolower((string)$paymentTerms) : null);
         $this->paymentMode = $paymentMode instanceof PaymentMode ? $paymentMode->value : ($paymentMode ? strtolower((string)$paymentMode) : null);
+        $this->invoiceType = $invoiceType instanceof InvoiceType ? $invoiceType->value : ($invoiceType ? strtolower((string)$invoiceType) : null);
+        $this->referenceInvoiceId = $referenceInvoiceId;
+        $this->status = $status instanceof InvoiceStatus ? $status->value : ($status ? strtolower((string)$status) : null);
+        $this->paymentStatus = $paymentStatus instanceof PaymentStatus ? $paymentStatus->value : ($paymentStatus ? strtolower((string)$paymentStatus) : null);
     }
 
     public static function make(
@@ -80,7 +95,11 @@ class InvoiceOptions implements JsonSerializable
         int|string|null $createdBy = null,
         ?Model $invoicable = null,
         ?SupplierInput $supplier = null,
-        ?RecipientInput $recipient = null
+        ?RecipientInput $recipient = null,
+        InvoiceType|string|null $invoiceType = null,
+        ?int $referenceInvoiceId = null,
+        InvoiceStatus|string|null $status = null,
+        PaymentStatus|string|null $paymentStatus = null
     ): self {
         return new self(
             gstMode: $gstMode,
@@ -104,7 +123,11 @@ class InvoiceOptions implements JsonSerializable
             createdBy: $createdBy,
             invoicable: $invoicable,
             supplier: $supplier,
-            recipient: $recipient
+            recipient: $recipient,
+            invoiceType: $invoiceType,
+            referenceInvoiceId: $referenceInvoiceId,
+            status: $status,
+            paymentStatus: $paymentStatus
         );
     }
 
@@ -140,8 +163,36 @@ class InvoiceOptions implements JsonSerializable
             createdBy: $data['created_by'] ?? ($data['createdBy'] ?? null),
             invoicable: $data['invoicable'] ?? null,
             supplier: $supplier instanceof SupplierInput ? $supplier : null,
-            recipient: $recipient instanceof RecipientInput ? $recipient : null
+            recipient: $recipient instanceof RecipientInput ? $recipient : null,
+            invoiceType: $data['invoice_type'] ?? ($data['invoiceType'] ?? null),
+            referenceInvoiceId: isset($data['reference_invoice_id']) ? (int)$data['reference_invoice_id'] : ($data['referenceInvoiceId'] ?? null),
+            status: $data['status'] ?? null,
+            paymentStatus: $data['payment_status'] ?? ($data['paymentStatus'] ?? null)
         );
+    }
+
+    public function invoiceType(InvoiceType|string|null $invoiceType): self
+    {
+        $this->invoiceType = $invoiceType instanceof InvoiceType ? $invoiceType->value : ($invoiceType ? strtolower((string)$invoiceType) : null);
+        return $this;
+    }
+
+    public function referenceInvoiceId(?int $id): self
+    {
+        $this->referenceInvoiceId = $id;
+        return $this;
+    }
+
+    public function status(InvoiceStatus|string|null $status): self
+    {
+        $this->status = $status instanceof InvoiceStatus ? $status->value : ($status ? strtolower((string)$status) : null);
+        return $this;
+    }
+
+    public function paymentStatus(PaymentStatus|string|null $paymentStatus): self
+    {
+        $this->paymentStatus = $paymentStatus instanceof PaymentStatus ? $paymentStatus->value : ($paymentStatus ? strtolower((string)$paymentStatus) : null);
+        return $this;
     }
 
     public function gstMode(GstMode|string|null $gstMode): self
@@ -292,6 +343,10 @@ class InvoiceOptions implements JsonSerializable
     public function toArray(): array
     {
         return [
+            'invoice_type' => $this->invoiceType,
+            'reference_invoice_id' => $this->referenceInvoiceId,
+            'status' => $this->status,
+            'payment_status' => $this->paymentStatus,
             'gst_mode' => $this->gstMode,
             'discount' => $this->discount,
             'discount_mode' => $this->discountMode,

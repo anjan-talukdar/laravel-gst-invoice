@@ -34,6 +34,14 @@ return [
     |--------------------------------------------------------------------------
     */
     'prefix' => env('GST_INVOICE_PREFIX', 'INV'),
+    'prefixes' => [
+        'quotation' => env('GST_PREFIX_QUOTATION', 'QT'),
+        'tax_invoice' => env('GST_PREFIX_TAX_INVOICE', 'INV'),
+        'credit_note' => env('GST_PREFIX_CREDIT_NOTE', 'CN'),
+        'debit_note' => env('GST_PREFIX_DEBIT_NOTE', 'DN'),
+        'receipt_voucher' => env('GST_PREFIX_RECEIPT_VOUCHER', 'RV'),
+    ],
+
     'serial_padding' => 5,
     'default_code_type' => 'SAC',
     'default_hsn' => env('GST_DEFAULT_HSN', '8471'),

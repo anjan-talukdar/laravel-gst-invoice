@@ -13,6 +13,7 @@ class GstInvoiceItem extends Model
 
     protected $fillable = [
         'gst_invoice_id',
+        'reference_invoice_item_id',
         'description',
         'code_type',
         'code',
@@ -52,5 +53,10 @@ class GstInvoiceItem extends Model
     public function invoice(): BelongsTo
     {
         return $this->belongsTo(GstInvoice::class, 'gst_invoice_id');
+    }
+
+    public function referenceItem(): BelongsTo
+    {
+        return $this->belongsTo(GstInvoiceItem::class, 'reference_invoice_item_id');
     }
 }

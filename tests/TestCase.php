@@ -51,9 +51,11 @@ abstract class TestCase extends BaseTestCase
 
     protected function runPackageMigrations(): void
     {
+        $sequencesMigration = include __DIR__ . '/../database/migrations/create_invoice_number_sequences_table.php.stub';
         $invoicesMigration = include __DIR__ . '/../database/migrations/create_gst_invoices_table.php.stub';
         $itemsMigration = include __DIR__ . '/../database/migrations/create_gst_invoice_items_table.php.stub';
 
+        $sequencesMigration->up();
         $invoicesMigration->up();
         $itemsMigration->up();
     }

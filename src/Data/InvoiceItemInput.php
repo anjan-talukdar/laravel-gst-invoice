@@ -10,6 +10,7 @@ class InvoiceItemInput implements JsonSerializable
 {
     public string $codeType = 'SAC';
     public string $taxCategory = 'taxable';
+    public ?int $referenceInvoiceItemId = null;
 
     public function __construct(
         public string $description = '',
@@ -22,10 +23,12 @@ class InvoiceItemInput implements JsonSerializable
         public float $gstRate = 18.0,
         public float $discount = 0.0,
         public int $sortOrder = 0,
-        public ?array $metaData = null
+        public ?array $metaData = null,
+        ?int $referenceInvoiceItemId = null
     ) {
         $this->codeType = $codeType instanceof CodeType ? $codeType->value : strtoupper((string)$codeType);
         $this->taxCategory = $taxCategory instanceof TaxCategory ? $taxCategory->value : strtolower((string)$taxCategory);
+        $this->referenceInvoiceItemId = $referenceInvoiceItemId;
     }
 
     public static function make(
@@ -39,7 +42,8 @@ class InvoiceItemInput implements JsonSerializable
         float $gstRate = 18.0,
         float $discount = 0.0,
         int $sortOrder = 0,
-        ?array $metaData = null
+        ?array $metaData = null,
+        ?int $referenceInvoiceItemId = null
     ): self {
         return new self(
             description: $description,
@@ -52,7 +56,8 @@ class InvoiceItemInput implements JsonSerializable
             gstRate: $gstRate,
             discount: $discount,
             sortOrder: $sortOrder,
-            metaData: $metaData
+            metaData: $metaData,
+            referenceInvoiceItemId: $referenceInvoiceItemId
         );
     }
 
@@ -69,8 +74,15 @@ class InvoiceItemInput implements JsonSerializable
             gstRate: (float)($data['gst_rate'] ?? ($data['gstRate'] ?? 18.0)),
             discount: (float)($data['discount'] ?? ($data['item_discount'] ?? ($data['itemDiscount'] ?? 0.0))),
             sortOrder: (int)($data['sort_order'] ?? ($data['sortOrder'] ?? 0)),
-            metaData: $data['meta_data'] ?? ($data['metaData'] ?? null)
+            metaData: $data['meta_data'] ?? ($data['metaData'] ?? null),
+            referenceInvoiceItemId: isset($data['reference_invoice_item_id']) ? (int)$data['reference_invoice_item_id'] : ($data['referenceInvoiceItemId'] ?? null)
         );
+    }
+
+    public function referenceInvoiceItemId(?int $id): self
+    {
+        $this->referenceInvoiceItemId = $id;
+        return $this;
     }
 
     public function description(string $description): self
@@ -153,6 +165,7 @@ class InvoiceItemInput implements JsonSerializable
             'discount' => $this->discount,
             'sort_order' => $this->sortOrder,
             'meta_data' => $this->metaData,
+            'reference_invoice_item_id' => $this->referenceInvoiceItemId,
         ];
     }
 

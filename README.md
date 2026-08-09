@@ -16,17 +16,21 @@ A production-ready, lightweight, type-safe, and highly extensible **GST Invoicin
 - [Key Features](#key-features)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Artisan CLI Commands](#artisan-cli-commands)
 - [Quick Start & Usage Guide](#quick-start--usage-guide)
   - [1. Standalone Checkout Calculation (No DB Write)](#1-standalone-checkout-calculation-no-db-write)
-  - [2. Invoice Generation](#2-invoice-generation)
-  - [3. Recording Payment](#3-recording-payment)
-  - [4. Cancelling an Invoice](#4-cancelling-an-invoice)
+  - [2. Generating Tax Invoices, Quotations, Credit Notes, Debit Notes & Receipt Vouchers](#2-generating-tax-invoices-quotations-credit-notes-debit-notes--receipt-vouchers)
+  - [3. Converting Accepted Quotations to Tax Invoices](#3-converting-accepted-quotations-to-tax-invoices)
+  - [4. Creating Revised Quotations](#4-creating-revised-quotations)
+  - [5. Updating Payment Summaries](#5-updating-payment-summaries)
+  - [6. Cancelling Documents](#6-cancelling-documents)
 - [API Reference & Parameter Tables](#api-reference--parameter-tables)
   - [1. Line Item Structure (`$items[]`)](#1-line-item-structure-items)
-  - [2. Options Parameter (`$options`)](#2-options-parameter-options)
-  - [3. Recipient Parameter (`$recipient`)](#3-recipient-parameter-recipient)
-  - [4. Payment Recording Parameters](#4-payment-recording-parameters)
-  - [5. Cancellation Parameters](#5-cancellation-parameters)
+  - [2. Recipient Parameter (`$recipient`)](#2-recipient-parameter-recipient)
+  - [3. Supplier & Bank Details (`$supplier`)](#3-supplier--bank-details-supplier)
+  - [4. Options Parameter (`$options`)](#4-options-parameter-options)
+  - [5. Payment Summary Parameters](#5-payment-summary-parameters)
+  - [6. Cancellation Parameters](#6-cancellation-parameters)
 - [Advanced Customization](#advanced-customization)
   - [Custom Invoice Number Generator](#custom-invoice-number-generator)
 - [Domain Events](#domain-events)
@@ -39,6 +43,12 @@ A production-ready, lightweight, type-safe, and highly extensible **GST Invoicin
 
 ## Key Features
 
+- **5 Native Document Types**: Full support for `Tax Invoices`, `Quotations`, `Credit Notes`, `Debit Notes`, and `Receipt Vouchers`.
+- **Atomic Concurrency-Safe Number Sequences**: Independent, atomic sequence generation per financial year using `invoice_number_sequences` table with `lockForUpdate()` database transactions.
+- **Quotation-to-Tax-Invoice Conversion Engine**: Seamlessly convert `accepted` quotations into new Tax Invoices with tax recalculation and source reference tracking (`reference_invoice_id`).
+- **Revised Quotation Tracking**: Version and revise quotations by linking new quotations to prior quotation IDs.
+- **Line-Item Based Credit Notes**: Link credit note items directly to original tax invoice items (`reference_invoice_item_id`) while preserving GST rate and tax category context.
+- **Strict Decoupled Status Architecture**: Decoupled document `status` from `payment_status`. `payment_status` is nullable and only applies to Tax Invoices.
 - **Goods (HSN) & Services (SAC) Support**: Handles both physical goods (HSN) and services (SAC) line items.
 - **Standalone Checkout Calculation Engine**: Run real-time tax math, discount allocations, and GST slab summaries for checkout pages, shopping carts, and quotations **without creating database records**.
 - **Place of Supply (POS) Engine**: Automatically determines **Intra-State** (`CGST` + `SGST`) vs **Inter-State** (`IGST`) tax routing based on 2-digit Indian State Codes (`01`–`38`).
@@ -47,10 +57,9 @@ A production-ready, lightweight, type-safe, and highly extensible **GST Invoicin
 - **Odd Paisa Tax Weightage**: Odd paisa tax splits (e.g. ₹100.11 tax) allocate the remainder 1 paisa to `CGST` or `SGST` based on configuration, ensuring `CGST + SGST === Total GST` down to the exact paisa.
 - **Strict Financial Immutability**: Invoices block editing of financial attributes once created, maintaining accounting integrity.
 - **Normalized Tables + JSON Snapshot**: Persists relational `gst_invoice_items` for queries & analytics while maintaining a fast, cached `billing_details` JSON rendering snapshot (`schema_version: "1.0"`).
-- **Interface-Driven Architecture**: Decoupled `InvoiceNumberGeneratorInterface` (supports custom patterns like `INV/25-26/00001` or `BBZ-2026-001`) and `TaxCalculatorInterface`.
-- **Money Value Object (`Money`)**: Internal precision math powered by a custom `Money` Value Object.
-- **PHP 8.1+ Enums**: 11 strongly-typed Enums covering all statuses, payment modes, terms, rounding strategies, and Indian State codes.
-- **Domain Event Ecosystem**: 12 lifecycle events (`InvoiceCreating`, `InvoiceCreated`, `InvoicePaid`, `InvoiceCancelled`, etc.) for webhooks and notifications.
+- **Interface-Driven Architecture**: Decoupled `InvoiceNumberGeneratorInterface` (supports custom patterns like `INV/26-27/00001` or `BBZ-2026-001`) and `TaxCalculatorInterface`.
+- **PHP 8.1+ Enums**: Strongly-typed Enums covering document types, statuses, payment statuses, rounding strategies, and Indian State codes.
+- **Domain Event Ecosystem**: 12 lifecycle events (`InvoiceCreating`, `InvoiceCreated`, `InvoicePaymentStatusChanged`, `InvoiceCancelled`, etc.) for webhooks and notifications.
 - **PDF & Rendering Agnostic**: Returns a structured `InvoiceData` DTO ready for any PDF generator (DomPDF, Browsershot, Snappy) or Blade/React/Vue view.
 
 ---
@@ -74,6 +83,12 @@ Run the database migrations:
 
 ```bash
 php artisan migrate
+```
+
+Sync default document number sequences:
+
+```bash
+php artisan gst-invoice:sync sequences
 ```
 
 ---
@@ -105,6 +120,14 @@ return [
     ],
 
     'prefix' => 'INV',
+    'prefixes' => [
+        'quotation' => env('GST_PREFIX_QUOTATION', 'QT'),
+        'tax_invoice' => env('GST_PREFIX_TAX_INVOICE', 'INV'),
+        'credit_note' => env('GST_PREFIX_CREDIT_NOTE', 'CN'),
+        'debit_note' => env('GST_PREFIX_DEBIT_NOTE', 'DN'),
+        'receipt_voucher' => env('GST_PREFIX_RECEIPT_VOUCHER', 'RV'),
+    ],
+
     'serial_padding' => 5,
     'default_code_type' => 'SAC',
     'default_hsn' => '8471',
@@ -114,9 +137,9 @@ return [
     'gst_mode' => 'inclusive',
     'currency_symbol' => '₹',
     'currency_code' => 'INR',
+
     'default_payment_terms' => 'due_on_receipt',
     'default_due_days' => 7,
-    'default_payment_mode' => 'bank_transfer',
     'rounding_strategy' => 'standard',
     'odd_paisa_weightage' => 'cgst',
 
@@ -130,6 +153,16 @@ return [
         'max_items_per_invoice' => 500,
     ],
 ];
+```
+
+---
+
+## Artisan CLI Commands
+
+Sync configured document prefixes with the sequence master table:
+
+```bash
+php artisan gst-invoice:sync sequences
 ```
 
 ---
@@ -169,9 +202,7 @@ echo $summary->summary->igstAmount; // 810.00
 echo $summary->summary->total;      // 5310.00
 ```
 
-### 2. Invoice Generation
-
-Create a fully persisted, immutable GST Invoice with normalized items and JSON snapshot:
+### 2. Generating Tax Invoices, Quotations, Credit Notes, Debit Notes & Receipt Vouchers
 
 ```php
 use AnjanTalukdar\GstInvoice\Facades\GstInvoice;
@@ -181,7 +212,6 @@ use AnjanTalukdar\GstInvoice\Data\InvoiceOptions;
 use AnjanTalukdar\GstInvoice\Enums\CodeType;
 use AnjanTalukdar\GstInvoice\Enums\TaxCategory;
 use AnjanTalukdar\GstInvoice\Enums\PaymentTerm;
-use AnjanTalukdar\GstInvoice\Enums\PaymentMode;
 
 $recipient = RecipientInput::make('Acme Technologies Ltd', 'Acme Store')
     ->email('accounts@acme.com')
@@ -200,54 +230,72 @@ $items = [
         ->quantity(40)
         ->unit('Hours')
         ->gstRate(18.0),
-    InvoiceItemInput::make('Server Hardware Component', 25000.00)
-        ->codeType(CodeType::HSN)
-        ->code('8471')
-        ->taxCategory(TaxCategory::TAXABLE)
-        ->quantity(1)
-        ->unit('Pcs')
-        ->gstRate(18.0),
 ];
 
-$invoice = GstInvoice::createInvoice(
-    $recipient,
-    $items,
-    InvoiceOptions::make()
-        ->paymentTerms(PaymentTerm::NET_30)
-        ->paymentMode(PaymentMode::BANK_TRANSFER)
-        ->isReverseCharge(false)
-        ->remark('Thank you for your business.')
-);
+// Create Tax Invoice (INV/26-27/00001)
+$taxInvoice = GstInvoice::createTaxInvoice($recipient, $items);
 
-echo $invoice->invoice_number; // e.g. "INV/25-26/00001"
-echo $invoice->total_in_words; // "Rupees One Lakh Hundred..."
+// Create Quotation (QT/26-27/00001)
+$quotation = GstInvoice::createQuotation($recipient, $items);
+
+// Create Receipt Voucher (RV/26-27/00001)
+$receiptVoucher = GstInvoice::createReceiptVoucher($recipient, $items);
+
+// Create Line-Item Credit Note (CN/26-27/00001)
+$cnItems = [
+    InvoiceItemInput::make('Return 5 Hours Consulting', 1500.00, 5.0, gstRate: 18.0, referenceInvoiceItemId: $taxInvoice->items->first()->id)
+];
+$creditNote = GstInvoice::createCreditNote($taxInvoice, $cnItems);
+
+// Create Debit Note (DN/26-27/00001)
+$debitNote = GstInvoice::createDebitNote($taxInvoice, $items);
 ```
 
-### 3. Recording Payment
+### 3. Converting Accepted Quotations to Tax Invoices
 
-Mark an invoice as paid or partially paid:
+Convert an `accepted` quotation into a new Tax Invoice with full tax recalculation and source tracking:
 
 ```php
-use AnjanTalukdar\GstInvoice\Data\PaymentInput;
+use AnjanTalukdar\GstInvoice\Facades\GstInvoice;
+use AnjanTalukdar\GstInvoice\Enums\InvoiceStatus;
 
-// Mark invoice as fully paid
-GstInvoice::markAsPaid(
-    $invoice,
-    PaymentInput::make($invoice->total)->paidAt(now())
-);
+$quotation->update(['status' => InvoiceStatus::ACCEPTED->value]);
 
-echo $invoice->payment_status->value; // 'paid'
+// Converts quotation to a new Tax Invoice (INV/26-27/00002)
+$taxInvoice = GstInvoice::convertQuotationToTaxInvoice($quotation);
+
+echo $taxInvoice->reference_invoice_id;  // $quotation->id
+echo $taxInvoice->payment_status->value; // 'unpaid'
 ```
 
-### 4. Cancelling an Invoice
+### 4. Creating Revised Quotations
 
-Cancel an invoice with an audit reason and record who performed the cancellation:
+Create a revised quotation linked to a prior quotation ID:
+
+```php
+$revisedQuotation = GstInvoice::createRevisedQuotation($quotation, $newItems);
+```
+
+### 5. Updating Payment Summaries
+
+Update derived payment fields on a Tax Invoice:
+
+```php
+GstInvoice::updatePaymentSummary($taxInvoice, paidAmount: 5000.00);
+
+echo $taxInvoice->payment_status->value; // 'partially_paid'
+echo $taxInvoice->due_amount;           // Remaining balance
+```
+
+### 6. Cancelling Documents
+
+Cancel any invoice or quotation with an audit reason and record who performed the cancellation:
 
 ```php
 GstInvoice::cancelInvoice($invoice, 'Duplicate invoice created by mistake', auth()->id());
 
-echo $invoice->status->value;              // 'cancelled'
-echo $invoice->cancellation_reason;       // 'Duplicate invoice created by mistake'
+echo $invoice->status->value;         // 'cancelled'
+echo $invoice->cancellation_reason;  // 'Duplicate invoice created by mistake'
 ```
 
 ---
@@ -256,7 +304,7 @@ echo $invoice->cancellation_reason;       // 'Duplicate invoice created by mista
 
 ### 1. Line Item Input DTO (`InvoiceItemInput`)
 
-Line item DTO passed to `calculateSummary()` and `createInvoice()`:
+Line item DTO passed to `calculateSummary()`, `createInvoice()`, `createQuotation()`, etc.:
 
 | Property | Data Type | Requirement | Default Value | Options / Enum Values | Description |
 |---|---|---|---|---|---|
@@ -269,6 +317,7 @@ Line item DTO passed to `calculateSummary()` and `createInvoice()`:
 | `taxCategory` | `TaxCategory` / `string` | Optional | `'taxable'` | `TaxCategory::TAXABLE`, `EXEMPT`, `NIL_RATED`, `NON_GST` | Tax category classification |
 | `gstRate` | `float` | Optional | `18.0` | `0`, `0.25`, `3`, `5`, `12`, `18`, `28` | GST percentage tax rate |
 | `discount` | `float` | Optional | `0.00` | Numeric (>= 0) | Direct item-level discount amount |
+| `referenceInvoiceItemId` | `int` | Optional | `null` | Integer ID | Reference item ID for Credit Note items |
 | `sortOrder` | `int` | Optional | `0` | Integer | Line item display sort order |
 | `metaData` | `array` | Optional | `null` | Key-value array | Additional item metadata |
 
@@ -324,6 +373,10 @@ Invoice options DTO passed to `calculateSummary()` and `createInvoice()`:
 
 | Property | Data Type | Requirement | Default Value | Options / Enum Values | Description |
 |---|---|---|---|---|---|
+| `invoiceType` | `InvoiceType` / `string` | Optional | `'tax_invoice'` | `'quotation'`, `'tax_invoice'`, `'credit_note'`, `'debit_note'`, `'receipt_voucher'` | Document classification type |
+| `referenceInvoiceId` | `int` | Optional | `null` | Integer ID | Foreign key referencing source document ID |
+| `status` | `InvoiceStatus` / `string` | Optional | Auto-set | `InvoiceStatus` Enum or string | Document status |
+| `paymentStatus` | `PaymentStatus` / `string` | Optional | Auto-set | `PaymentStatus` Enum or string | Payment status (Tax Invoices only) |
 | `gstMode` | `GstMode` / `string` | Optional | config default (`'inclusive'`) | `GstMode::INCLUSIVE`, `EXCLUSIVE`, `'inclusive'`, `'exclusive'` | Tax calculation mode |
 | `discount` | `float` | Optional | `0.00` | Numeric (>= 0) | Total bill-level discount to allocate proportionally |
 | `discountMode` | `DiscountMode` / `string` | Optional | `'bill'` | `DiscountMode::BILL`, `ITEM`, `'bill'`, `'item'` | Discount strategy mode |
@@ -339,7 +392,6 @@ Invoice options DTO passed to `calculateSummary()` and `createInvoice()`:
 | `dueDays` | `int` | Optional | `7` | Integer (> 0) | Days until payment due date |
 | `dueDate` | `DateTimeInterface` / `string` | Optional | `invoice_date + due_days` | `YYYY-MM-DD` string or DateTime object | Explicit payment due date |
 | `paymentTerms` | `PaymentTerm` / `string` | Optional | config default (`'due_on_receipt'`) | `PaymentTerm` Enum or string | Invoice payment terms |
-| `paymentMode` | `PaymentMode` / `string` | Optional | config default (`'bank_transfer'`) | `PaymentMode` Enum or string | Payment method |
 | `currency` | `string` | Optional | config default (`'INR'`) | Currency code string (e.g. `'INR'`) | Invoice currency |
 | `remark` | `string` | Optional | `null` | Any string | Internal or public remark note |
 | `createdBy` | `int` / `string` | Optional | `auth()->id()` | Integer ID or string | Identifier of invoice creator |
@@ -349,24 +401,20 @@ Invoice options DTO passed to `calculateSummary()` and `createInvoice()`:
 
 ---
 
-### 5. Payment Recording DTO (`PaymentInput`)
+### 5. Payment Summary Parameters
 
-Passed to `markAsPaid($invoice, $paymentData)`:
+Passed to `updatePaymentSummary($invoice, $paidAmount)`:
 
-| Property | Data Type | Requirement | Default Value | Description |
+| Argument | Data Type | Requirement | Default Value | Description |
 |---|---|---|---|---|
-| `amount` | `float` | Optional | `$invoice->total` | Amount paid (supports partial or full payment) |
-| `paidAt` | `DateTimeInterface` / `string` | Optional | `now()` | Date and time when payment was received |
-| `paymentMode` | `PaymentMode` / `string` | Optional | `null` | Payment mode |
-| `referenceNumber` | `string` | Optional | `null` | Transaction UTR / reference number |
-| `notes` | `string` | Optional | `null` | Internal payment notes |
+| `$invoice` | `GstInvoice` | **Mandatory** | - | `GstInvoice` model instance (Tax Invoice) |
+| `$paidAmount` | `float` | **Mandatory** | - | Total cumulative paid amount |
 
 ---
 
 ### 6. Cancellation Parameters
 
 Passed to `cancelInvoice($invoice, $reason, $cancelledBy)`:
-
 
 | Argument | Data Type | Requirement | Default Value | Description |
 |---|---|---|---|---|
@@ -380,7 +428,7 @@ Passed to `cancelInvoice($invoice, $reason, $cancelledBy)`:
 
 ### Custom Invoice Number Generator
 
-Replace the default sequential FY generator (`INV/25-26/00001`) with your custom numbering strategy by binding `InvoiceNumberGeneratorInterface` in your `AppServiceProvider`:
+Replace the default sequential FY generator (`INV/26-27/00001`) with your custom numbering strategy by binding `InvoiceNumberGeneratorInterface` in your `AppServiceProvider`:
 
 ```php
 use AnjanTalukdar\GstInvoice\Contracts\InvoiceNumberGeneratorInterface;
@@ -399,7 +447,7 @@ $this->app->bind(InvoiceNumberGeneratorInterface::class, function () {
 
 ## Domain Events
 
-The package dispatches 12 domain lifecycle events that you can listen to in your application (e.g., for sending email notifications, triggering webhooks, or updating order statuses).
+The package dispatches 12 domain lifecycle events that you can listen to in your application:
 
 ### List of Available Events
 
@@ -457,19 +505,19 @@ return view('gst-invoice::sample-invoice', ['invoice' => $dto->toArray()]);
 
 ## Enums Reference
 
-The package includes 11 strongly-typed PHP 8.1+ Enums:
+The package includes strongly-typed PHP 8.1+ Enums:
 
+- `AnjanTalukdar\GstInvoice\Enums\InvoiceType` (`QUOTATION`, `TAX_INVOICE`, `CREDIT_NOTE`, `DEBIT_NOTE`, `RECEIPT_VOUCHER`)
+- `AnjanTalukdar\GstInvoice\Enums\InvoiceStatus` (`DRAFT`, `ISSUED`, `SENT`, `ACCEPTED`, `REJECTED`, `EXPIRED`, `APPLIED`, `CANCELLED`)
+- `AnjanTalukdar\GstInvoice\Enums\PaymentStatus` (`UNPAID`, `PARTIALLY_PAID`, `PAID`, `OVERDUE`)
 - `AnjanTalukdar\GstInvoice\Enums\CodeType` (`HSN`, `SAC`)
 - `AnjanTalukdar\GstInvoice\Enums\TaxCategory` (`TAXABLE`, `EXEMPT`, `NIL_RATED`, `NON_GST`)
 - `AnjanTalukdar\GstInvoice\Enums\GstMode` (`INCLUSIVE`, `EXCLUSIVE`)
-- `AnjanTalukdar\GstInvoice\Enums\InvoiceStatus` (`ACTIVE`, `CANCELLED`)
-- `AnjanTalukdar\GstInvoice\Enums\PaymentStatus` (`UNPAID`, `PAID`, `PARTIAL`, `OVERDUE`)
 - `AnjanTalukdar\GstInvoice\Enums\PaymentTerm` (`DUE_ON_RECEIPT`, `NET_15`, `NET_30`, `NET_60`, `CUSTOM`)
-- `AnjanTalukdar\GstInvoice\Enums\PaymentMode` (`CASH`, `UPI`, `BANK_TRANSFER`, `CARD`, `CHEQUE`, `NET_BANKING`, `OTHER`)
 - `AnjanTalukdar\GstInvoice\Enums\RoundingStrategy` (`STANDARD`, `FLOOR`, `CEIL`, `BANKERS`)
 - `AnjanTalukdar\GstInvoice\Enums\DiscountMode` (`BILL`, `ITEM`)
 - `AnjanTalukdar\GstInvoice\Enums\OddPaisaWeightage` (`CGST`, `SGST`)
-- `AnjanTalukdar\GstInvoice\Enums\IndianState` (Full list of 36+ Indian States with 2-digit GST state codes)
+- `AnjanTalukdar\GstInvoice\Enums\IndianState` (Full list of Indian States with 2-digit GST state codes)
 
 ---
 
@@ -478,7 +526,7 @@ The package includes 11 strongly-typed PHP 8.1+ Enums:
 Run the package test suite:
 
 ```bash
-vendor/bin/phpunit
+vendor/bin/phpunit packages/anjan-talukdar/laravel-gst-invoice
 ```
 
 ---

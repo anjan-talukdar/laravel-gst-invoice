@@ -4,7 +4,7 @@ namespace AnjanTalukdar\GstInvoice\Models;
 
 use AnjanTalukdar\GstInvoice\Data\InvoiceData;
 use AnjanTalukdar\GstInvoice\Enums\InvoiceStatus;
-use AnjanTalukdar\GstInvoice\Enums\PaymentMode;
+use AnjanTalukdar\GstInvoice\Enums\InvoiceType;
 use AnjanTalukdar\GstInvoice\Enums\PaymentStatus;
 use AnjanTalukdar\GstInvoice\Enums\PaymentTerm;
 use AnjanTalukdar\GstInvoice\Events\InvoiceCancelled;
@@ -15,6 +15,7 @@ use AnjanTalukdar\GstInvoice\Events\InvoiceUpdating;
 use AnjanTalukdar\GstInvoice\Exceptions\InvoiceImmutableException;
 use AnjanTalukdar\GstInvoice\Helpers\NumberToWords;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Support\Facades\Auth;
@@ -24,11 +25,12 @@ class GstInvoice extends Model
     protected $table = 'gst_invoices';
 
     protected $fillable = [
+        'invoice_type',
+        'reference_invoice_id',
         'invoice_number',
         'invoice_date',
         'due_date',
         'payment_terms',
-        'payment_mode',
         'invoicable_type',
         'invoicable_id',
         'recipient_type',
@@ -77,7 +79,6 @@ class GstInvoice extends Model
 
         'payment_status',
         'status',
-        'paid_at',
         'cancelled_at',
         'cancelled_by',
         'cancellation_reason',
@@ -88,10 +89,10 @@ class GstInvoice extends Model
     ];
 
     protected $casts = [
+        'invoice_type' => InvoiceType::class,
         'invoice_date' => 'date',
         'due_date' => 'date',
         'payment_terms' => PaymentTerm::class,
-        'payment_mode' => PaymentMode::class,
         'payment_status' => PaymentStatus::class,
         'status' => InvoiceStatus::class,
         'is_interstate' => 'boolean',
@@ -107,7 +108,6 @@ class GstInvoice extends Model
         'total' => 'decimal:2',
         'paid_amount' => 'decimal:2',
         'due_amount' => 'decimal:2',
-        'paid_at' => 'datetime',
         'cancelled_at' => 'datetime',
         'billing_details' => 'array',
     ];
@@ -164,9 +164,31 @@ class GstInvoice extends Model
         return $this->morphTo();
     }
 
+    public function referenceInvoice(): BelongsTo
+    {
+        return $this->belongsTo(GstInvoice::class, 'reference_invoice_id');
+    }
+
+    public function childInvoices(): HasMany
+    {
+        return $this->hasMany(GstInvoice::class, 'reference_invoice_id');
+    }
+
+    public function creditNotes(): HasMany
+    {
+        return $this->hasMany(GstInvoice::class, 'reference_invoice_id')
+            ->where('invoice_type', InvoiceType::CREDIT_NOTE->value);
+    }
+
+    public function debitNotes(): HasMany
+    {
+        return $this->hasMany(GstInvoice::class, 'reference_invoice_id')
+            ->where('invoice_type', InvoiceType::DEBIT_NOTE->value);
+    }
+
     public function isActive(): bool
     {
-        return $this->status === InvoiceStatus::ACTIVE;
+        return $this->status !== InvoiceStatus::CANCELLED;
     }
 
     public function isCancelled(): bool
@@ -215,17 +237,21 @@ class GstInvoice extends Model
             'igst_amount' => (float)$item->igst_amount,
             'gst_amount' => (float)($item->cgst_amount + $item->sgst_amount + $item->igst_amount),
             'total_amount' => (float)$item->total_amount,
+            'reference_invoice_item_id' => $item->reference_invoice_item_id,
             'meta_data' => $item->meta_data,
             'sort_order' => $item->sort_order,
         ])->toArray();
 
         $arr = [
             'schema_version' => '1.0',
+            'invoice_type' => $this->invoice_type?->value ?? 'tax_invoice',
+            'invoice_type_label' => $this->invoice_type?->label() ?? 'Tax Invoice',
+            'reference_invoice_id' => $this->reference_invoice_id,
+            'reference_invoice_number' => $this->referenceInvoice?->invoice_number,
             'invoice_number' => $this->invoice_number,
             'invoice_date' => $this->invoice_date?->format('Y-m-d'),
             'due_date' => $this->due_date?->format('Y-m-d'),
             'payment_terms' => $this->payment_terms?->value ?? 'due_on_receipt',
-            'payment_mode' => $this->payment_mode?->value ?? 'bank_transfer',
             'is_reverse_charge' => (bool)$this->is_reverse_charge,
             'discount_mode' => $this->discount_mode ?? ($this->billing_details['discount_mode'] ?? 'bill'),
             'pos_state_name' => $this->pos_state_name,
@@ -277,8 +303,8 @@ class GstInvoice extends Model
             'bank_details' => $this->bank_details,
             'currency' => $this->currency ?: 'INR',
             'remark' => $this->remark,
-            'status' => $this->status?->value ?? 'active',
-            'payment_status' => $this->payment_status?->value ?? 'unpaid',
+            'status' => $this->status?->value ?? 'issued',
+            'payment_status' => $this->payment_status?->value,
             'cancelled_at' => $this->cancelled_at?->toIso8601String(),
             'cancelled_by' => $this->cancelled_by,
             'cancellation_reason' => $this->cancellation_reason,
