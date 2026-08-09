@@ -10,83 +10,103 @@ return new class extends Migration
     {
         Schema::create('gst_invoices', function (Blueprint $table) {
             $table->id();
-            $table->enum('invoice_type', ['quotation', 'tax_invoice', 'credit_note', 'debit_note', 'receipt_voucher'])->default('tax_invoice')->index();
-            $table->foreignId('reference_invoice_id')->nullable()->constrained('gst_invoices')->nullOnDelete();
-            $table->string('invoice_number')->unique();
+
+            $table->enum('invoice_type', [
+                'quotation',
+                'tax_invoice',
+                'credit_note',
+                'debit_note',
+                'receipt_voucher',
+                'bill_of_supply',
+                'simple_receipt',
+            ])->default('tax_invoice');
+
+            $table->unsignedBigInteger('reference_invoice_id')->nullable()->index();
+            $table->string('invoice_number', 50)->unique();
             $table->date('invoice_date');
             $table->date('due_date')->nullable();
-            $table->string('payment_terms')->default('due_on_receipt');
+            $table->string('payment_terms', 50)->default('due_on_receipt');
 
-            // Polymorphic relations
             $table->nullableMorphs('invoicable');
             $table->nullableMorphs('recipient');
 
-            // Supplier Snapshot
             $table->string('supplier_name');
-            $table->string('supplier_gstin')->nullable()->index();
-            $table->string('supplier_pan')->nullable();
-            $table->string('supplier_address')->nullable();
-            $table->string('supplier_city')->nullable();
-            $table->string('supplier_state_name')->nullable();
+            $table->string('supplier_gstin', 15)->nullable();
+            $table->string('supplier_pan', 10)->nullable();
+            $table->text('supplier_address')->nullable();
+            $table->string('supplier_city', 100)->nullable();
+            $table->string('supplier_state_name', 100)->nullable();
             $table->string('supplier_state_code', 2)->nullable();
-            $table->string('supplier_pincode')->nullable();
+            $table->string('supplier_pincode', 10)->nullable();
             $table->string('supplier_email')->nullable();
-            $table->string('supplier_phone')->nullable();
+            $table->string('supplier_phone', 20)->nullable();
 
-            // Recipient Snapshot
             $table->string('recipient_name');
             $table->string('recipient_email')->nullable();
-            $table->string('recipient_phone')->nullable();
-            $table->string('recipient_gstin')->nullable()->index();
-            $table->string('recipient_pan')->nullable();
-            $table->string('recipient_address')->nullable();
-            $table->string('recipient_city')->nullable();
-            $table->string('recipient_state_name')->nullable();
+            $table->string('recipient_phone', 20)->nullable();
+            $table->string('recipient_gstin', 15)->nullable();
+            $table->string('recipient_pan', 10)->nullable();
+            $table->text('recipient_address')->nullable();
+            $table->string('recipient_city', 100)->nullable();
+            $table->string('recipient_state_name', 100)->nullable();
             $table->string('recipient_state_code', 2)->nullable();
-            $table->string('recipient_pincode')->nullable();
+            $table->string('recipient_pincode', 10)->nullable();
 
-            // Place of Supply (POS)
-            $table->string('pos_state_name')->nullable();
-            $table->string('pos_state_code', 2)->nullable()->index();
-
-            // Flags
+            $table->string('pos_state_name', 100);
+            $table->string('pos_state_code', 2);
             $table->boolean('is_interstate')->default(false);
             $table->boolean('is_reverse_charge')->default(false);
-            $table->string('discount_mode')->default('bill');
 
-            // Financial Summaries (DECIMAL(15,2))
-            $table->decimal('gross_taxable', 15, 2)->default(0.00);
-            $table->decimal('discount', 15, 2)->default(0.00);
-            $table->decimal('subtotal', 15, 2)->default(0.00);
-            $table->decimal('cgst_amount', 15, 2)->default(0.00);
-            $table->decimal('sgst_amount', 15, 2)->default(0.00);
-            $table->decimal('igst_amount', 15, 2)->default(0.00);
-            $table->decimal('gst_amount', 15, 2)->default(0.00);
-            $table->decimal('round_off', 15, 2)->default(0.00);
-            $table->decimal('total', 15, 2)->default(0.00);
+            $table->string('discount_mode', 20)->default('bill');
+
+            $table->decimal('gross_taxable', 15, 2)->default(0);
+            $table->decimal('discount', 15, 2)->default(0);
+            $table->decimal('subtotal', 15, 2)->default(0);
+            $table->decimal('cgst_amount', 15, 2)->default(0);
+            $table->decimal('sgst_amount', 15, 2)->default(0);
+            $table->decimal('igst_amount', 15, 2)->default(0);
+            $table->decimal('gst_amount', 15, 2)->default(0);
+            $table->decimal('round_off', 15, 2)->default(0);
+            $table->decimal('total', 15, 2)->default(0);
             $table->string('currency', 3)->default('INR');
-            $table->decimal('paid_amount', 15, 2)->default(0.00);
-            $table->decimal('due_amount', 15, 2)->default(0.00);
 
-            // Status & Audit
-            $table->string('payment_status')->nullable()->index();
-            $table->string('status')->default('issued')->index();
+            $table->decimal('paid_amount', 15, 2)->default(0);
+            $table->decimal('due_amount', 15, 2)->default(0);
 
-            // Cancellation audit
-            $table->timestamp('cancelled_at')->nullable();
-            $table->string('cancelled_by')->nullable();
-            $table->string('cancellation_reason')->nullable();
+            $table->enum('status', [
+                'draft',
+                'issued',
+                'sent',
+                'accepted',
+                'rejected',
+                'expired',
+                'applied',
+                'cancelled',
+            ])->default('draft');
 
-            // Cached Rendering Snapshot JSON
+            $table->enum('payment_status', [
+                'unpaid',
+                'partially_paid',
+                'paid',
+                'overdue',
+            ])->nullable();
+
             $table->json('billing_details')->nullable();
 
             $table->text('remark')->nullable();
+
+            $table->string('cancellation_reason')->nullable();
+            $table->timestamp('cancelled_at')->nullable();
+            $table->unsignedBigInteger('cancelled_by')->nullable();
+
             $table->unsignedBigInteger('created_by')->nullable();
+
             $table->timestamps();
 
-            // Additional composite/indexes for performance
-            $table->index('invoice_date');
-            $table->index('created_at');
+            $table->foreign('reference_invoice_id')
+                ->references('id')
+                ->on('gst_invoices')
+                ->nullOnDelete();
         });
     }
 

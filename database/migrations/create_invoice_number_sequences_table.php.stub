@@ -10,13 +10,21 @@ return new class extends Migration
     {
         Schema::create('invoice_number_sequences', function (Blueprint $table) {
             $table->id();
-            $table->enum('invoice_type', ['quotation', 'tax_invoice', 'credit_note', 'debit_note', 'receipt_voucher']);
+            $table->enum('invoice_type', [
+                'quotation',
+                'tax_invoice',
+                'credit_note',
+                'debit_note',
+                'receipt_voucher',
+                'bill_of_supply',
+                'simple_receipt',
+            ]);
             $table->string('financial_year', 10);
             $table->string('prefix', 10);
-            $table->unsignedBigInteger('last_number')->default(0);
+            $table->unsignedBigInteger('current_sequence')->default(0);
             $table->timestamps();
 
-            $table->unique(['invoice_type', 'financial_year'], 'inv_num_seq_type_fy_unique');
+            $table->unique(['invoice_type', 'financial_year'], 'inv_seq_type_fy_unique');
         });
     }
 

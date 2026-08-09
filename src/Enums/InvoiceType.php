@@ -9,6 +9,8 @@ enum InvoiceType: string
     case CREDIT_NOTE = 'credit_note';
     case DEBIT_NOTE = 'debit_note';
     case RECEIPT_VOUCHER = 'receipt_voucher';
+    case BILL_OF_SUPPLY = 'bill_of_supply';
+    case SIMPLE_RECEIPT = 'simple_receipt';
 
     public function label(): string
     {
@@ -18,6 +20,8 @@ enum InvoiceType: string
             self::CREDIT_NOTE => 'Credit Note',
             self::DEBIT_NOTE => 'Debit Note',
             self::RECEIPT_VOUCHER => 'Receipt Voucher',
+            self::BILL_OF_SUPPLY => 'Bill of Supply',
+            self::SIMPLE_RECEIPT => 'Simple Receipt',
         };
     }
 
@@ -31,6 +35,8 @@ enum InvoiceType: string
             self::CREDIT_NOTE => $prefixes['credit_note'] ?? 'CN',
             self::DEBIT_NOTE => $prefixes['debit_note'] ?? 'DN',
             self::RECEIPT_VOUCHER => $prefixes['receipt_voucher'] ?? 'RV',
+            self::BILL_OF_SUPPLY => $prefixes['bill_of_supply'] ?? 'BOS',
+            self::SIMPLE_RECEIPT => $prefixes['simple_receipt'] ?? 'REC',
         };
     }
 }

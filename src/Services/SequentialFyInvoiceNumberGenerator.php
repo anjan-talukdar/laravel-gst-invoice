@@ -46,7 +46,7 @@ class SequentialFyInvoiceNumberGenerator implements InvoiceNumberGeneratorInterf
                     'invoice_type' => $invoiceType->value,
                     'financial_year' => $fyCode,
                     'prefix' => $prefix,
-                    'last_number' => 0,
+                    'current_sequence' => 0,
                 ]);
 
                 // Re-lock newly created sequence row
@@ -60,10 +60,10 @@ class SequentialFyInvoiceNumberGenerator implements InvoiceNumberGeneratorInterf
                 $sequence->prefix = $prefix;
             }
 
-            $sequence->last_number += 1;
+            $sequence->current_sequence += 1;
             $sequence->save();
 
-            $serialStr = str_pad((string)$sequence->last_number, $padding, '0', STR_PAD_LEFT);
+            $serialStr = str_pad((string)$sequence->current_sequence, $padding, '0', STR_PAD_LEFT);
 
             return "{$prefix}/{$fyCode}/{$serialStr}";
         });

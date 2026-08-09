@@ -20,9 +20,20 @@ use AnjanTalukdar\GstInvoice\Events\InvoicePaid;
 use AnjanTalukdar\GstInvoice\Events\InvoicePartiallyPaid;
 use AnjanTalukdar\GstInvoice\Events\InvoicePaymentStatusChanged;
 use AnjanTalukdar\GstInvoice\Events\InvoicePaymentStatusChanging;
+use AnjanTalukdar\GstInvoice\Events\InvoiceUpdated;
 use AnjanTalukdar\GstInvoice\Exceptions\InvalidGstInvoiceException;
 use AnjanTalukdar\GstInvoice\Models\GstInvoice;
 use AnjanTalukdar\GstInvoice\Models\GstInvoiceItem;
+use AnjanTalukdar\GstInvoice\Services\SubServices\BillOfSupplyService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\ComplianceService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\CreditNoteService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\DebitNoteService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\EInvoiceService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\QuotationService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\ReceiptVoucherService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\RenderingService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\SimpleReceiptService;
+use AnjanTalukdar\GstInvoice\Services\SubServices\TaxInvoiceService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
@@ -30,11 +41,76 @@ use Illuminate\Support\Facades\DB;
 
 class GstInvoiceService
 {
+    protected ?TaxInvoiceService $taxInvoiceService = null;
+    protected ?QuotationService $quotationService = null;
+    protected ?CreditNoteService $creditNoteService = null;
+    protected ?DebitNoteService $debitNoteService = null;
+    protected ?ReceiptVoucherService $receiptVoucherService = null;
+    protected ?BillOfSupplyService $billOfSupplyService = null;
+    protected ?SimpleReceiptService $simpleReceiptService = null;
+    protected ?ComplianceService $complianceService = null;
+    protected ?EInvoiceService $eInvoiceService = null;
+    protected ?RenderingService $renderingService = null;
+
     public function __construct(
         protected TaxCalculatorInterface $taxCalculator,
         protected InvoiceNumberGeneratorInterface $numberGenerator,
         protected GstInvoiceValidator $validator
     ) {}
+
+    // --- Fluent Sub-Service Accessors ---
+
+    public function taxInvoice(): TaxInvoiceService
+    {
+        return $this->taxInvoiceService ??= new TaxInvoiceService($this);
+    }
+
+    public function quotations(): QuotationService
+    {
+        return $this->quotationService ??= new QuotationService($this);
+    }
+
+    public function creditNotes(): CreditNoteService
+    {
+        return $this->creditNoteService ??= new CreditNoteService($this);
+    }
+
+    public function debitNotes(): DebitNoteService
+    {
+        return $this->debitNoteService ??= new DebitNoteService($this);
+    }
+
+    public function receiptVouchers(): ReceiptVoucherService
+    {
+        return $this->receiptVoucherService ??= new ReceiptVoucherService($this);
+    }
+
+    public function billsOfSupply(): BillOfSupplyService
+    {
+        return $this->billOfSupplyService ??= new BillOfSupplyService($this);
+    }
+
+    public function simpleReceipts(): SimpleReceiptService
+    {
+        return $this->simpleReceiptService ??= new SimpleReceiptService($this);
+    }
+
+    public function reports(): ComplianceService
+    {
+        return $this->complianceService ??= new ComplianceService();
+    }
+
+    public function eInvoice(): EInvoiceService
+    {
+        return $this->eInvoiceService ??= new EInvoiceService();
+    }
+
+    public function rendering(): RenderingService
+    {
+        return $this->renderingService ??= new RenderingService();
+    }
+
+    // --- Core Billing & Document Engine Methods ---
 
     /**
      * Calculate billing summary for checkout / preview without saving.
@@ -48,7 +124,7 @@ class GstInvoiceService
     }
 
     /**
-     * Create a GST Invoice document (Tax Invoice, Quotation, Credit Note, Debit Note, Receipt Voucher).
+     * Create a GST Invoice document (Tax Invoice, Quotation, Credit Note, Debit Note, Receipt Voucher, Bill of Supply, Simple Receipt).
      *
      * @param RecipientInput|GstRecipientInterface|Model $recipient
      * @param InvoiceItemInput[] $items
@@ -78,15 +154,18 @@ class GstInvoiceService
             $options->supplierStateCode($supplierSnapshot['state_code']);
         }
         if (empty($options->posStateCode)) {
-            $options->posStateCode($recipientSnapshot['shipping_state_code'] ?: $recipientSnapshot['state_code']);
+            $options->posStateCode($recipientSnapshot['shipping_state_code'] ?: ($recipientSnapshot['state_code'] ?: $supplierSnapshot['state_code']));
         }
         if (empty($options->posStateName)) {
-            $options->posStateName($recipientSnapshot['shipping_state_name'] ?: $recipientSnapshot['state_name']);
+            $options->posStateName($recipientSnapshot['shipping_state_name'] ?: ($recipientSnapshot['state_name'] ?: $supplierSnapshot['state_name']));
         }
 
         $summaryData = $this->calculateSummary($items, $options);
 
-        return DB::transaction(function () use ($recipient, $supplierSnapshot, $recipientSnapshot, $summaryData, $options, $items, $invoiceType, $statusValue) {
+        $posStateCode = $summaryData->posStateCode ?: ($options->posStateCode ?: $supplierSnapshot['state_code']);
+        $posStateName = $summaryData->posStateName ?: ($options->posStateName ?: $supplierSnapshot['state_name']);
+
+        return DB::transaction(function () use ($recipient, $supplierSnapshot, $recipientSnapshot, $summaryData, $options, $items, $invoiceType, $statusValue, $posStateCode, $posStateName) {
             $invoiceDate = $options->invoiceDate ? Carbon::parse($options->invoiceDate) : now();
             $dueDays = $options->dueDays ?? (int)config('gst-invoice.default_due_days', 7);
             $dueDate = $options->dueDate ? Carbon::parse($options->dueDate) : $invoiceDate->copy()->addDays($dueDays);
@@ -136,8 +215,8 @@ class GstInvoiceService
                 'recipient_state_code' => $recipientSnapshot['state_code'],
                 'recipient_pincode' => $recipientSnapshot['pincode'],
 
-                'pos_state_name' => $summaryData->posStateName,
-                'pos_state_code' => $summaryData->posStateCode,
+                'pos_state_name' => $posStateName,
+                'pos_state_code' => $posStateCode,
                 'is_interstate' => $summaryData->isInterstate,
                 'is_reverse_charge' => $summaryData->isReverseCharge,
                 'discount_mode' => $summaryData->discountMode ?? 'bill',
@@ -271,6 +350,28 @@ class GstInvoiceService
     }
 
     /**
+     * Create a Bill of Supply (for exempt/composition supplies).
+     */
+    public function createBillOfSupply(mixed $recipient, array $items, ?InvoiceOptions $options = null): GstInvoice
+    {
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::BILL_OF_SUPPLY);
+
+        return $this->createInvoice($recipient, $items, $options);
+    }
+
+    /**
+     * Create a Simple Receipt document.
+     */
+    public function createSimpleReceipt(mixed $recipient, array $items, ?InvoiceOptions $options = null): GstInvoice
+    {
+        $options = $options ?? new InvoiceOptions();
+        $options->invoiceType(InvoiceType::SIMPLE_RECEIPT);
+
+        return $this->createInvoice($recipient, $items, $options);
+    }
+
+    /**
      * Convert an Accepted Quotation into a new Tax Invoice.
      */
     public function convertQuotationToTaxInvoice(GstInvoice $quotation, ?array $items = null, ?InvoiceOptions $options = null): GstInvoice
@@ -338,6 +439,76 @@ class GstInvoiceService
         $recipient = $quotation->recipient ?: $this->extractRecipientInputFromInvoice($quotation);
 
         return $this->createInvoice($recipient, $revisedItems, $options);
+    }
+
+    /**
+     * Issue a document (transitions draft status to issued).
+     */
+    public function issueDocument(GstInvoice $invoice): GstInvoice
+    {
+        if ($invoice->status === InvoiceStatus::ISSUED) {
+            return $invoice;
+        }
+
+        $this->validator->validateStatusTransition($invoice->invoice_type, InvoiceStatus::ISSUED->value);
+        $invoice->update(['status' => InvoiceStatus::ISSUED->value]);
+        event(new InvoiceUpdated($invoice));
+
+        return $invoice;
+    }
+
+    public function validateDocumentBeforeIssue(GstInvoice $invoice): bool
+    {
+        return !empty($invoice->invoice_number)
+            && !empty($invoice->supplier_name)
+            && !empty($invoice->recipient_name)
+            && $invoice->items->count() > 0;
+    }
+
+    public function recalculateDocument(GstInvoice $invoice): GstInvoice
+    {
+        $itemsInput = $invoice->items->map(fn(GstInvoiceItem $item) => InvoiceItemInput::fromArray([
+            'description' => $item->description,
+            'unit_price' => (float)$item->unit_price,
+            'quantity' => (float)$item->quantity,
+            'unit' => $item->unit,
+            'code_type' => $item->code_type?->value ?? 'SAC',
+            'code' => $item->code,
+            'tax_category' => $item->tax_category?->value ?? 'taxable',
+            'gst_rate' => (float)$item->gst_rate,
+            'discount' => (float)$item->item_discount,
+            'sort_order' => $item->sort_order,
+            'meta_data' => $item->meta_data,
+        ]))->toArray();
+
+        $options = InvoiceOptions::make()
+            ->supplierStateCode($invoice->supplier_state_code)
+            ->posStateCode($invoice->pos_state_code)
+            ->posStateName($invoice->pos_state_name)
+            ->isInterstate((bool)$invoice->is_interstate)
+            ->isReverseCharge((bool)$invoice->is_reverse_charge)
+            ->discount((float)$invoice->discount);
+
+        $summaryData = $this->calculateSummary($itemsInput, $options);
+
+        $invoice->update([
+            'gross_taxable' => $summaryData->summary->grossTaxable,
+            'discount' => $summaryData->summary->discount,
+            'subtotal' => $summaryData->summary->subtotal,
+            'cgst_amount' => $summaryData->summary->cgstAmount,
+            'sgst_amount' => $summaryData->summary->sgstAmount,
+            'igst_amount' => $summaryData->summary->igstAmount,
+            'gst_amount' => $summaryData->summary->gstAmount,
+            'round_off' => $summaryData->summary->roundOff,
+            'total' => $summaryData->summary->total,
+            'due_amount' => max(0.00, round($summaryData->summary->total - (float)$invoice->paid_amount, 2)),
+        ]);
+
+        $invoice->refresh();
+        $structured = $invoice->toStructuredData();
+        $invoice->updateQuietly(['billing_details' => $structured->toArray()]);
+
+        return $invoice;
     }
 
     /**
@@ -492,7 +663,7 @@ class GstInvoiceService
                 'shipping_city' => $recipient->shipping_city ?? null,
                 'shipping_state_name' => $recipient->shipping_state_name ?? null,
                 'shipping_state_code' => $recipient->shipping_state_code ?? null,
-                'shipping_pincode' => $recipient->shipping_pincode ?? null,
+                'shipping_pincode' => $recipient->shippingPincode ?? null,
             ];
         }
 

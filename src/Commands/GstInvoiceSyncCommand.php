@@ -52,7 +52,7 @@ class GstInvoiceSyncCommand extends Command
                 ],
                 [
                     'prefix' => $prefix,
-                    'last_number' => 0,
+                    'current_sequence' => 0,
                 ]
             );
 
@@ -60,7 +60,7 @@ class GstInvoiceSyncCommand extends Command
                 $sequence->update(['prefix' => $prefix]);
             }
 
-            $this->line("  [✓] {$type->label()} ({$type->value}): FY {$fyCode} => Prefix '{$prefix}' (Last #: {$sequence->last_number})");
+            $this->line("  [✓] {$type->label()} ({$type->value}): FY {$fyCode} => Prefix '{$prefix}' (Current #: {$sequence->current_sequence})");
         }
 
         $this->info('Invoice number sequences successfully synced!');

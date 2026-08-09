@@ -21,12 +21,12 @@ enum InvoiceStatus: string
     public static function allowedForType(InvoiceType $type): array
     {
         return match ($type) {
-            InvoiceType::TAX_INVOICE => [
+            InvoiceType::TAX_INVOICE, InvoiceType::BILL_OF_SUPPLY => [
                 self::DRAFT,
                 self::ISSUED,
                 self::CANCELLED,
             ],
-            InvoiceType::CREDIT_NOTE, InvoiceType::DEBIT_NOTE, InvoiceType::RECEIPT_VOUCHER => [
+            InvoiceType::CREDIT_NOTE, InvoiceType::DEBIT_NOTE, InvoiceType::RECEIPT_VOUCHER, InvoiceType::SIMPLE_RECEIPT => [
                 self::DRAFT,
                 self::ISSUED,
                 self::APPLIED,
