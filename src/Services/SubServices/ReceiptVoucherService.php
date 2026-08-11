@@ -28,4 +28,14 @@ class ReceiptVoucherService
     {
         return $this->service->cancelInvoice($voucher, $reason, $cancelledBy);
     }
+
+    public function forceUpdate(
+        GstInvoice $voucher,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        return $this->service->forceUpdateInvoice($voucher, $recipient, $items, $options, $additionalAttributes);
+    }
 }

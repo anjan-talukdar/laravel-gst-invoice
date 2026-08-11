@@ -46,4 +46,17 @@ class DebitNoteService
 
         return round((float)$originalInvoice->total + $totalDebited, 2);
     }
+
+    public function forceUpdate(
+        GstInvoice $debitNote,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        if ($debitNote->invoice_type !== InvoiceType::DEBIT_NOTE) {
+            throw new \AnjanTalukdar\GstInvoice\Exceptions\InvalidGstInvoiceException("Document is not a Debit Note.");
+        }
+        return $this->service->forceUpdateInvoice($debitNote, $recipient, $items, $options, $additionalAttributes);
+    }
 }

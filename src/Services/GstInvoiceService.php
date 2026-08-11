@@ -438,7 +438,12 @@ class GstInvoiceService
 
         $recipient = $quotation->recipient ?: $this->extractRecipientInputFromInvoice($quotation);
 
-        return $this->createInvoice($recipient, $revisedItems, $options);
+        return DB::transaction(function () use ($quotation, $revisedItems, $options, $recipient) {
+            $revisedQuotation = $this->createInvoice($recipient, $revisedItems, $options);
+            $quotation->cancelInvoice("Superseded by revised quotation #{$revisedQuotation->invoice_number}");
+
+            return $revisedQuotation;
+        });
     }
 
     /**
@@ -467,48 +472,183 @@ class GstInvoiceService
 
     public function recalculateDocument(GstInvoice $invoice): GstInvoice
     {
-        $itemsInput = $invoice->items->map(fn(GstInvoiceItem $item) => InvoiceItemInput::fromArray([
-            'description' => $item->description,
-            'unit_price' => (float)$item->unit_price,
-            'quantity' => (float)$item->quantity,
-            'unit' => $item->unit,
-            'code_type' => $item->code_type?->value ?? 'SAC',
-            'code' => $item->code,
-            'tax_category' => $item->tax_category?->value ?? 'taxable',
-            'gst_rate' => (float)$item->gst_rate,
-            'discount' => (float)$item->item_discount,
-            'sort_order' => $item->sort_order,
-            'meta_data' => $item->meta_data,
-        ]))->toArray();
+        return GstInvoice::withoutImmutability(function () use ($invoice) {
+            $itemsInput = $invoice->items->map(fn(GstInvoiceItem $item) => InvoiceItemInput::fromArray([
+                'description' => $item->description,
+                'unit_price' => (float)$item->unit_price,
+                'quantity' => (float)$item->quantity,
+                'unit' => $item->unit,
+                'code_type' => $item->code_type?->value ?? 'SAC',
+                'code' => $item->code,
+                'tax_category' => $item->tax_category?->value ?? 'taxable',
+                'gst_rate' => (float)$item->gst_rate,
+                'discount' => (float)$item->item_discount,
+                'sort_order' => $item->sort_order,
+                'meta_data' => $item->meta_data,
+            ]))->toArray();
 
-        $options = InvoiceOptions::make()
-            ->supplierStateCode($invoice->supplier_state_code)
-            ->posStateCode($invoice->pos_state_code)
-            ->posStateName($invoice->pos_state_name)
-            ->isInterstate((bool)$invoice->is_interstate)
-            ->isReverseCharge((bool)$invoice->is_reverse_charge)
-            ->discount((float)$invoice->discount);
+            $options = InvoiceOptions::make()
+                ->supplierStateCode($invoice->supplier_state_code)
+                ->posStateCode($invoice->pos_state_code)
+                ->posStateName($invoice->pos_state_name)
+                ->isInterstate((bool)$invoice->is_interstate)
+                ->isReverseCharge((bool)$invoice->is_reverse_charge)
+                ->discount((float)$invoice->discount);
 
-        $summaryData = $this->calculateSummary($itemsInput, $options);
+            $summaryData = $this->calculateSummary($itemsInput, $options);
 
-        $invoice->update([
-            'gross_taxable' => $summaryData->summary->grossTaxable,
-            'discount' => $summaryData->summary->discount,
-            'subtotal' => $summaryData->summary->subtotal,
-            'cgst_amount' => $summaryData->summary->cgstAmount,
-            'sgst_amount' => $summaryData->summary->sgstAmount,
-            'igst_amount' => $summaryData->summary->igstAmount,
-            'gst_amount' => $summaryData->summary->gstAmount,
-            'round_off' => $summaryData->summary->roundOff,
-            'total' => $summaryData->summary->total,
-            'due_amount' => max(0.00, round($summaryData->summary->total - (float)$invoice->paid_amount, 2)),
-        ]);
+            $invoice->update([
+                'gross_taxable' => $summaryData->summary->grossTaxable,
+                'discount' => $summaryData->summary->discount,
+                'subtotal' => $summaryData->summary->subtotal,
+                'cgst_amount' => $summaryData->summary->cgstAmount,
+                'sgst_amount' => $summaryData->summary->sgstAmount,
+                'igst_amount' => $summaryData->summary->igstAmount,
+                'gst_amount' => $summaryData->summary->gstAmount,
+                'round_off' => $summaryData->summary->roundOff,
+                'total' => $summaryData->summary->total,
+                'due_amount' => max(0.00, round($summaryData->summary->total - (float)$invoice->paid_amount, 2)),
+            ]);
 
-        $invoice->refresh();
-        $structured = $invoice->toStructuredData();
-        $invoice->updateQuietly(['billing_details' => $structured->toArray()]);
+            $invoice->refresh();
+            $structured = $invoice->toStructuredData();
+            $invoice->updateQuietly(['billing_details' => $structured->toArray()]);
 
-        return $invoice;
+            return $invoice;
+        });
+    }
+
+    /**
+     * Force update an existing GST Invoice document of any type.
+     *
+     * @param GstInvoice $invoice
+     * @param mixed $recipient
+     * @param array|null $items
+     * @param InvoiceOptions|null $options
+     * @param array $additionalAttributes
+     * @return GstInvoice
+     */
+    public function forceUpdateInvoice(
+        GstInvoice $invoice,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        return DB::transaction(function () use ($invoice, $recipient, $items, $options, $additionalAttributes) {
+            return GstInvoice::withoutImmutability(function () use ($invoice, $recipient, $items, $options, $additionalAttributes) {
+                $options = $options ?? new InvoiceOptions();
+
+                $updateData = [];
+
+                if ($recipient !== null) {
+                    $recipientSnapshot = $this->extractRecipientSnapshot($recipient, $options);
+                    $updateData['recipient_type'] = $recipient instanceof Model ? get_class($recipient) : null;
+                    $updateData['recipient_id'] = $recipient instanceof Model ? $recipient->getKey() : null;
+                    $updateData['recipient_name'] = $recipientSnapshot['name'];
+                    $updateData['recipient_email'] = $recipientSnapshot['email'];
+                    $updateData['recipient_phone'] = $recipientSnapshot['phone'];
+                    $updateData['recipient_gstin'] = $recipientSnapshot['gstin'];
+                    $updateData['recipient_pan'] = $recipientSnapshot['pan'];
+                    $updateData['recipient_address'] = $recipientSnapshot['address'];
+                    $updateData['recipient_city'] = $recipientSnapshot['city'];
+                    $updateData['recipient_state_name'] = $recipientSnapshot['state_name'];
+                    $updateData['recipient_state_code'] = $recipientSnapshot['state_code'];
+                    $updateData['recipient_pincode'] = $recipientSnapshot['pincode'];
+                }
+
+                if ($options->supplier !== null || !empty(config('gst-invoice.supplier'))) {
+                    $supplierSnapshot = $this->extractSupplierSnapshot($options);
+                    $updateData['supplier_name'] = $supplierSnapshot['name'];
+                    $updateData['supplier_gstin'] = $supplierSnapshot['gstin'];
+                    $updateData['supplier_pan'] = $supplierSnapshot['pan'];
+                    $updateData['supplier_address'] = $supplierSnapshot['address'];
+                    $updateData['supplier_city'] = $supplierSnapshot['city'];
+                    $updateData['supplier_state_name'] = $supplierSnapshot['state_name'];
+                    $updateData['supplier_state_code'] = $supplierSnapshot['state_code'];
+                    $updateData['supplier_pincode'] = $supplierSnapshot['pincode'];
+                    $updateData['supplier_email'] = $supplierSnapshot['email'];
+                    $updateData['supplier_phone'] = $supplierSnapshot['phone'];
+                }
+
+                if ($items !== null) {
+                    $this->validator->validateInvoiceInput($items, $options);
+
+                    // Re-calculate summary
+                    $summaryData = $this->calculateSummary($items, $options);
+
+                    // Sync line items
+                    $invoice->items()->delete();
+
+                    foreach ($summaryData->items as $index => $itemData) {
+                        $inputItem = $items[$index] ?? null;
+                        $refItemId = null;
+                        if ($inputItem instanceof InvoiceItemInput) {
+                            $refItemId = $inputItem->referenceInvoiceItemId;
+                        } elseif (is_array($inputItem)) {
+                            $refItemId = $inputItem['reference_invoice_item_id'] ?? ($inputItem['referenceInvoiceItemId'] ?? null);
+                        }
+
+                        GstInvoiceItem::create([
+                            'gst_invoice_id' => $invoice->id,
+                            'reference_invoice_item_id' => $refItemId,
+                            'description' => $itemData->description,
+                            'code_type' => $itemData->codeType,
+                            'code' => $itemData->code,
+                            'tax_category' => $itemData->taxCategory,
+                            'quantity' => $itemData->quantity,
+                            'unit' => $itemData->unit,
+                            'unit_price' => $itemData->unitPrice,
+                            'item_discount' => $itemData->itemDiscount,
+                            'bill_discount' => $itemData->billDiscount,
+                            'taxable_amount' => $itemData->taxableAmount,
+                            'gst_rate' => $itemData->gstRate,
+                            'cgst_amount' => $itemData->cgstAmount,
+                            'sgst_amount' => $itemData->sgstAmount,
+                            'igst_amount' => $itemData->igstAmount,
+                            'total_amount' => $itemData->totalAmount,
+                            'sort_order' => $itemData->sortOrder,
+                            'meta_data' => $itemData->metaData,
+                        ]);
+                    }
+
+                    $updateData['gross_taxable'] = $summaryData->summary->grossTaxable;
+                    $updateData['discount'] = $summaryData->summary->discount;
+                    $updateData['subtotal'] = $summaryData->summary->subtotal;
+                    $updateData['cgst_amount'] = $summaryData->summary->cgstAmount;
+                    $updateData['sgst_amount'] = $summaryData->summary->sgstAmount;
+                    $updateData['igst_amount'] = $summaryData->summary->igstAmount;
+                    $updateData['gst_amount'] = $summaryData->summary->gstAmount;
+                    $updateData['round_off'] = $summaryData->summary->roundOff;
+                    $updateData['total'] = $summaryData->summary->total;
+                    $updateData['due_amount'] = max(0.00, round($summaryData->summary->total - (float)$invoice->paid_amount, 2));
+
+                    if ($summaryData->posStateCode) {
+                        $updateData['pos_state_code'] = $summaryData->posStateCode;
+                    }
+                    if ($summaryData->posStateName) {
+                        $updateData['pos_state_name'] = $summaryData->posStateName;
+                    }
+                    $updateData['is_interstate'] = $summaryData->isInterstate;
+                    $updateData['is_reverse_charge'] = $summaryData->isReverseCharge;
+                    $updateData['discount_mode'] = $summaryData->discountMode ?? 'bill';
+                }
+
+                if (!empty($additionalAttributes)) {
+                    $updateData = array_merge($updateData, $additionalAttributes);
+                }
+
+                if (!empty($updateData)) {
+                    $invoice->update($updateData);
+                }
+
+                $invoice->refresh();
+                $structuredDTO = $invoice->toStructuredData();
+                $invoice->updateQuietly(['billing_details' => $structuredDTO->toArray()]);
+
+                return $invoice;
+            });
+        });
     }
 
     /**

@@ -24,4 +24,14 @@ class SimpleReceiptService
     {
         return $this->service->cancelInvoice($receipt, $reason, $cancelledBy);
     }
+
+    public function forceUpdate(
+        GstInvoice $receipt,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        return $this->service->forceUpdateInvoice($receipt, $recipient, $items, $options, $additionalAttributes);
+    }
 }

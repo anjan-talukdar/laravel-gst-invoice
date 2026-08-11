@@ -59,5 +59,21 @@ $revisedQuotation = GstInvoice::quotations()->createRevised($quotation, $revised
 
 The new quotation will point its `reference_invoice_id` to the older quotation, allowing you to build an audit trail of negotiation revisions.
 
+When a revised quotation is created:
+1. The new quotation is generated with `reference_invoice_id` set to the parent quotation's ID.
+2. The parent quotation's status is **automatically set to `cancelled`** with `cancellation_reason = "Superseded by revised quotation #..."`.
+
+## Revision Helper Methods
+
+You can check if a quotation has subsequent revisions or is read-only using model helpers:
+
+```php
+// Returns true if a newer child document of the same type (QUOTATION) exists
+$isSuperseded = $quotation->hasNewerRevision();
+
+// Returns true if the quotation has a newer revision or is cancelled
+$isReadOnly = $quotation->isReadOnly();
+```
+
 ---
 [← Back to Documentation Index](../README.md)

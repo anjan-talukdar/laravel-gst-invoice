@@ -24,4 +24,14 @@ class BillOfSupplyService
     {
         return $this->service->cancelInvoice($billOfSupply, $reason, $cancelledBy);
     }
+
+    public function forceUpdate(
+        GstInvoice $billOfSupply,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        return $this->service->forceUpdateInvoice($billOfSupply, $recipient, $items, $options, $additionalAttributes);
+    }
 }

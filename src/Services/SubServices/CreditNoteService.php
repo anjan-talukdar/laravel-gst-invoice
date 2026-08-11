@@ -62,6 +62,19 @@ class CreditNoteService
         return max(0.00, round((float)$originalInvoice->total - $totalCredited, 2));
     }
 
+    public function forceUpdate(
+        GstInvoice $creditNote,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        if ($creditNote->invoice_type !== InvoiceType::CREDIT_NOTE) {
+            throw new InvalidGstInvoiceException("Document is not a Credit Note.");
+        }
+        return $this->service->forceUpdateInvoice($creditNote, $recipient, $items, $options, $additionalAttributes);
+    }
+
     protected function validateAdjustableLimit(GstInvoice $originalInvoice, array $items): void
     {
         $remainingTotal = $this->getRemainingAdjustableAmount($originalInvoice);

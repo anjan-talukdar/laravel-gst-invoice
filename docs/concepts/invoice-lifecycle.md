@@ -43,5 +43,17 @@ GstInvoice::cancelInvoice(
 
 Cancelling an invoice updates its status to `cancelled`, sets the `cancelled_at` timestamp, and fires the `InvoiceCancelled` domain event.
 
+## Read-Only & Revision State
+
+Models provide convenience methods to inspect if a document is superseded or read-only:
+
+```php
+// Checks if a newer child document of the same type (e.g. QUOTATION) exists
+$isSuperseded = $invoice->hasNewerRevision();
+
+// Checks if the document is read-only (either cancelled or has a newer same-type revision)
+$isReadOnly = $invoice->isReadOnly();
+```
+
 ---
 [← Back to Documentation Index](../README.md)

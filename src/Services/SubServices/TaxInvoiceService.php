@@ -37,6 +37,16 @@ class TaxInvoiceService
         return $this->service->recalculateDocument($invoice);
     }
 
+    public function forceUpdate(
+        GstInvoice $invoice,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        return $this->service->forceUpdateInvoice($invoice, $recipient, $items, $options, $additionalAttributes);
+    }
+
     public function getOriginalDocument(GstInvoice $invoice): ?GstInvoice
     {
         return $invoice->referenceInvoice;

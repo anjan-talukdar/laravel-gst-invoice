@@ -102,6 +102,17 @@ class QuotationService
             ->get();
     }
 
+    public function forceUpdate(
+        GstInvoice $quotation,
+        mixed $recipient = null,
+        ?array $items = null,
+        ?InvoiceOptions $options = null,
+        array $additionalAttributes = []
+    ): GstInvoice {
+        $this->ensureQuotation($quotation);
+        return $this->service->forceUpdateInvoice($quotation, $recipient, $items, $options, $additionalAttributes);
+    }
+
     protected function ensureQuotation(GstInvoice $invoice): void
     {
         if ($invoice->invoice_type !== InvoiceType::QUOTATION) {

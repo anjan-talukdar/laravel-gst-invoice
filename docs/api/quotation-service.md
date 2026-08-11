@@ -60,7 +60,7 @@ If `$items` or `$options` are `null`, it inherits them directly from the Quotati
 
 ## `createRevised()`
 
-Generates a revised version of a quotation, linking the new quotation to the old one.
+Generates a revised version of a quotation, linking the new quotation to the old one, and automatically marks the parent quotation as `cancelled` with reason `"Superseded by revised quotation #..."`.
 
 ```php
 public function createRevised(

@@ -112,28 +112,60 @@ class GstInvoice extends Model
         'billing_details' => 'array',
     ];
 
+    public bool $allowForceUpdate = false;
+    public static bool $bypassImmutability = false;
+
+    public function allowForceUpdate(bool $allow = true): static
+    {
+        $this->allowForceUpdate = $allow;
+        return $this;
+    }
+
+    public function forceUpdate(array $attributes = [], array $options = []): bool
+    {
+        $this->allowForceUpdate = true;
+        try {
+            return $this->update($attributes, $options);
+        } finally {
+            $this->allowForceUpdate = false;
+        }
+    }
+
+    public static function withoutImmutability(callable $callback): mixed
+    {
+        $previous = static::$bypassImmutability;
+        static::$bypassImmutability = true;
+        try {
+            return $callback();
+        } finally {
+            static::$bypassImmutability = $previous;
+        }
+    }
+
     protected static function boot()
     {
         parent::boot();
 
         static::updating(function (GstInvoice $invoice) {
-            $financialFields = [
-                'gross_taxable',
-                'discount',
-                'subtotal',
-                'cgst_amount',
-                'sgst_amount',
-                'igst_amount',
-                'gst_amount',
-                'round_off',
-                'total',
-                'supplier_name',
-                'supplier_gstin'
-            ];
+            if (!$invoice->allowForceUpdate && !static::$bypassImmutability) {
+                $financialFields = [
+                    'gross_taxable',
+                    'discount',
+                    'subtotal',
+                    'cgst_amount',
+                    'sgst_amount',
+                    'igst_amount',
+                    'gst_amount',
+                    'round_off',
+                    'total',
+                    'supplier_name',
+                    'supplier_gstin'
+                ];
 
-            foreach ($financialFields as $field) {
-                if ($invoice->isDirty($field)) {
-                    throw new InvoiceImmutableException($invoice->invoice_number);
+                foreach ($financialFields as $field) {
+                    if ($invoice->isDirty($field)) {
+                        throw new InvoiceImmutableException($invoice->invoice_number);
+                    }
                 }
             }
 
@@ -199,6 +231,24 @@ class GstInvoice extends Model
     public function isPaid(): bool
     {
         return $this->payment_status === PaymentStatus::PAID;
+    }
+
+    public function hasNewerRevision(): bool
+    {
+        if (!$this->invoice_type) {
+            return false;
+        }
+
+        $typeValue = $this->invoice_type instanceof InvoiceType ? $this->invoice_type->value : $this->invoice_type;
+
+        return $this->childInvoices()
+            ->where('invoice_type', $typeValue)
+            ->exists();
+    }
+
+    public function isReadOnly(): bool
+    {
+        return $this->hasNewerRevision() || $this->isCancelled();
     }
 
     public function getIsIntraStateAttribute(): bool
